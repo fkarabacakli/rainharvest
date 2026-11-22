@@ -49,7 +49,8 @@ Backend, ESP32 cihazlarından MQTT ile gelen veriyi alır, saklar, kuralları ç
 | D21 | Topic'te mahal yok | MQTT topic'i `rainwater/<deviceId>/...` olarak kalır | Cihaz mahalini bilmez; taşıma firmware değişikliği gerektirmez |
 | D11 | API dokümantasyonu | `Microsoft.AspNetCore.OpenApi` + Scalar, tek güvenlik şeması OAuth2 (password flow), yalnızca Development'ta | Scalar "Authorize" ile kendisi giriş yapar |
 | D23 | Tek giriş noktası | Yalnızca `POST /auth/token` (OAuth2 password grant); ayrı JSON login yok | Standart format; Keycloak'a geçişte istemciler için yalnızca URL değişir |
-| D12 | Gerçek zamanlı veri | SignalR, sözleşmesi `docs/realtime.md` içinde | OpenAPI SignalR'ı kapsamıyor |
+| D12 | Gerçek zamanlı veri | SignalR (`/hubs/live`), sözleşmesi [docs/realtime.md](docs/realtime.md) içinde. Token `?access_token=` ile yalnızca `/hubs` altında kabul edilir | OpenAPI SignalR'ı kapsamıyor; tarayıcı WebSocket'te başlık gönderemez |
+| D24 | CORS | İzinli origin'ler `Cors:AllowedOrigins` ayarından; Development'ta `:5173`, `:3000`, `:4200`. `AllowCredentials` açık (SignalR JS istemcisi negotiate'i credentials ile yapar); kimlik doğrulama cookie değil bearer token olduğu için CSRF riski yok | Panel ayrı origin'de çalışacak |
 | D13 | Hata modeli | `ProblemDetails` (RFC 9457), doğrulama hataları alan bazında | Panel tek bir formatı işler |
 | D14 | API yolu | `/api/v1/...` | |
 | D15 | Zaman | Her yerde UTC, ISO 8601. Sunucu alış zamanı esas, cihaz zamanı ayrıca saklanır | ESP32 saati kayabilir |
@@ -133,8 +134,8 @@ Tümü `/api/v1` altında. Panel ekibi `/openapi/v1.json` üzerinden client üre
 | GET | `/devices/{id}/commands/{commandId}` | cihaza erişimi olan | Tek komut ve durumu: `Sent`, `Accepted`, `Rejected`, `Completed`, `Expired` |
 | GET | `/devices/{id}/settings` | cihaza erişimi olan | Eşikler |
 | PUT | `/devices/{id}/settings` | Admin | Eşikleri güncelle → retained `config` yayınla |
-| GET | `/alerts` | giriş yapmış | Erişebildiği cihazların uyarıları; `status=open/acknowledged`, sayfalı |
-| POST | `/alerts/{id}/ack` | cihaza erişimi olan | Uyarıyı onayla |
+| GET | `/alerts` | giriş yapmış | Erişebildiği cihazların uyarıları, yeniden eskiye. `status=active` (varsayılan; kapanmamış) / `resolved` / `all`, `deviceId`, `limit` |
+| POST | `/alerts/{id}/ack` | cihaza erişimi olan | Uyarıyı onayla (görüldü). Uyarıyı kapatmaz; idempotent |
 | GET | `/health` | anonim | DB + MQTT bağlantısı |
 
 **Neden ayrı bir `irrigate` komutu var?** Valf çıkışta, pompadan sonra duruyor. Sulama "valf aç → pompa çalıştır → pompa durdur → valf kapat" sırasıyla yapılmalı. Bu sırayı ve kilitlemeyi (kapalı valfe karşı pompa çalışmaz) **cihaz** yönetir. Backend ve panel yalnızca "şu kadar süre sula" der. Tek tek pompa ve valf komutları bakım içindir ve cihaz kilitlemeye aykırı olanları reddeder.
@@ -170,9 +171,9 @@ Hub: `/hubs/live`. Bağlanan kullanıcı, üyesi olduğu **her mahalin grubuna o
 | `ActuatorStateChanged` | `{deviceId, pumpOn, valveOpen, irrigating, at}` |
 | `CommandUpdated` | Komut DTO'su (durum değiştiğinde) |
 | `DeviceStatusChanged` | `{deviceId, isOnline, at}` |
-| `AlertRaised` | Uyarı DTO'su |
+| `AlertRaised` / `AlertResolved` / `AlertAcknowledged` | Uyarı DTO'su |
 
-Ayrıntılar `docs/realtime.md` dosyasında yazılacak (M4).
+Ayrıntılar, örnek akış ve TypeScript istemcisi: [docs/realtime.md](docs/realtime.md).
 
 ## 7. Veri modeli
 
@@ -218,10 +219,19 @@ Kurallar saf fonksiyon olarak yazılır: `(okuma, ayarlar, son durum, şimdi) �
   - Kural kendi başlattığı sulamayı `SoilPct ≥ SoilWetPct` olunca `stop` ile erken bitirir (histerezisin üst sınırı). Kullanıcının elle başlattığı sulamaya dokunmaz.
   - Şu durumlarda sulama **yapılmaz**: otomatik sulama kapalı, yanıt bekleyen bir komut var, sulama zaten sürüyor, yağmur yağıyor, depo `LevelMinPct` altında, su kalitesi kötü, ya da son otomatik sulamadan beri `IrrigationCooldownS` dolmadı.
   - Bekleme süresi, sonucu ne olursa olsun son otomatik `irrigate` komutundan sayılır. Böylece cihaz sürekli reddetse bile her okumada yeni komut gönderilmez.
-  - Ayrıca bir uyarı (depo boş, su kötü) M4'te eklenecek.
-- **Su kalitesi:** pH aralık dışında ya da bulanıklık limit üstündeyse otomatik sulama yapılmaz (M3); `WaterQualityBad` uyarısı M4'te üretilecek. Cihaz da kendi tarafında sulamayı engeller (çift koruma). Kirli su depoya girebildiği için uyarı mesajı kullanıcıyı depoyu kontrol etmeye yönlendirmeli.
-- **Cihaz offline:** LWT `offline` gelirse ya da 60 saniye telemetri gelmezse `DeviceOffline` uyarısı üretilir.
-- **Uyarı tekrarını bastırma:** Aynı cihaz ve aynı uyarı tipi için açık bir uyarı varsa yeni uyarı açılmaz. Durum düzelince uyarı otomatik kapanır (bu karar M3'te kesinleşecek).
+- **Su kalitesi:** pH aralık dışında ya da bulanıklık limit üstündeyse otomatik sulama yapılmaz ve `WaterQualityBad` uyarısı açılır. Cihaz da kendi tarafında sulamayı engeller (çift koruma). Kirli su depoya girebildiği için uyarı mesajı kullanıcıyı depoyu kontrol etmeye yönlendirmeli.
+- **Uyarılar** (`Features/Alerts/AlertRule.cs`, saf fonksiyon):
+
+  | Tip | Önem | Açılır | Kendiliğinden kapanır |
+  |---|---|---|---|
+  | `WaterQualityBad` | Warning | pH aralık dışı ya da bulanıklık limit üstü | pH aralığın 0.1 içinde ve bulanıklık limitin %90'ının altında |
+  | `TankLow` | Warning | Depo `LevelMinPct` altında | Depo `LevelMinPct + 5` üstünde |
+  | `DeviceOffline` | Critical | `status = offline` (LWT ya da temiz kapanış) | Cihaz yeniden online |
+
+  - **Tekrar bastırma:** Bir cihazda aynı tipte en fazla bir açık uyarı olur (veritabanında filtreli benzersiz indeks).
+  - **Otomatik kapanma (karar):** Sebep ortadan kalkınca uyarı kendiliğinden kapanır. Kapanma eşiği açılmadan biraz sıkı tutulur (histerezis), böylece eşik etrafında gidip gelen bir değer uyarıyı sürekli açıp kapatmaz.
+  - **Onaylama** yalnızca "görüldü" kaydıdır, uyarıyı kapatmaz.
+  - **Telemetri kesilmesi:** Ayrı bir "60 sn telemetri gelmedi" kontrolü yok. Ağ kopmasını broker keep-alive (15 sn × 1.5) ile algılayıp LWT yayınladığı için `DeviceOffline` zaten açılıyor.
 
 ## 9. Cihaz simülatörü
 
@@ -296,11 +306,26 @@ Her biri **"bitti" tanımıyla** birlikte:
 ## 14. Açık noktalar
 
 - Firmware ekibinin `docs/mqtt.md`'deki kesinleşen `cmd`/`state`/`config` sözleşmesini onaylaması; `DeviceControllerTests` beklenen davranışı gösteriyor
-- Uyarıların otomatik kapanıp kapanmayacağı (M3)
 - Yeniden bağlanmada kalıcı MQTT oturumu kullanılıp kullanılmayacağı (M3)
 - Cihaz id'si fabrikada mı yüklenecek, MAC'ten mi türetilecek (firmware ekibi). MAC seçilirse `esp_efuse_mac_get_default` kullanılmalı, bayt sırası kutudaki etiketle aynı olmalı
 
 ## 15. Mevcut durum
+
+**M5'in Docker kısmı tamamlandı** (2026-11-22):
+- `docker compose --profile full up -d --build` ile API, simülatör, TimescaleDB ve Mosquitto tek komutla kalkıyor; .NET kurulumu gerekmiyor. API Docker'da da `http://localhost:5255`'te.
+- Development'ta demo verisi: `demo` kullanıcısı, "Demo Ev" mahali, içinde `node1` ve `node2` (`Seed:DemoData`). Admin ve normal kullanıcı görünümü ilk açılışta denenebiliyor.
+- Panel geliştiricisi için [README.md](README.md): kurulum, giriş bilgileri, bağlanma örneği, senaryo değiştirme, sorun giderme.
+- CORS, SignalR JS istemcisi için `AllowCredentials` ile düzeltildi (negotiate credentials'la yapılıyor).
+- Boş veritabanıyla sıfırdan kurulum doğrulandı: migration'lar ve seed, `demo` ile giriş, cihazlar online, CORS, **gerçek WebSocket ile SignalR** (`ReadingReceived` geldi).
+- M5'te kalan: CSV dışa aktarımı.
+
+**M4 tamamlandı** (2026-11-22):
+- Uyarılar: `WaterQualityBad`, `TankLow`, `DeviceOffline`; tekrar bastırma, histerezisli otomatik kapanma, onaylama. `GET /alerts`, `POST /alerts/{id}/ack`.
+- SignalR hub `/hubs/live`: kullanıcı yalnızca kendi mahallerinin olaylarını alır. Olaylar: `ReadingReceived`, `DeviceStatusChanged`, `ActuatorStateChanged`, `CommandUpdated`, `AlertRaised`/`Resolved`/`Acknowledged`. Sözleşme [docs/realtime.md](docs/realtime.md)'de.
+- Olaylar uygulama içi domain event'leriyle taşınıyor; uyarılar ve SignalR aynı olayları dinliyor, birbirini tanımıyor.
+- CORS yapılandırmayla eklendi.
+- **Hata düzeltmesi:** Cihaz erişim filtresi, handler'da `deviceId` adlı query parametresi olsa da devreye girip `GET /alerts?deviceId=` isteğine 404 dönüyordu. Artık yalnızca `{deviceId}` route'ta varsa çalışıyor; regresyon testi eklendi.
+- Gerçek ortamda doğrulandı: `bad-water` cihazı furkan'ın evinde `WaterQualityBad` uyarısı açtı, arkadaşın görmedi. Hub negotiate isteği query token'la 200, token'sız 401. CORS yalnızca izinli origin'e izin veriyor.
 
 **M3 tamamlandı** (2026-11-22):
 - `cmd`, `state` ve `config` sözleşmesi kesinleşti ([docs/mqtt.md](docs/mqtt.md)).

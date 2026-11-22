@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Domain;
 using RainHarvest.Api.Infrastructure.Persistence;
 
@@ -25,16 +26,28 @@ public sealed partial class CommandTimeoutWorker(
                 var now = timeProvider.GetUtcNow();
                 var cutoff = now - Timeout;
 
-                var expired = await db.DeviceCommands
+                var stale = await db.DeviceCommands
                     .Where(c => c.Status == CommandStatus.Sent && c.CreatedAt < cutoff)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(c => c.Status, CommandStatus.Expired)
-                        .SetProperty(c => c.StatusReason, "timeout")
-                        .SetProperty(c => c.UpdatedAt, now), stoppingToken);
-
-                if (expired > 0)
+                    .ToListAsync(stoppingToken);
+                if (stale.Count == 0)
                 {
-                    LogExpired(expired);
+                    continue;
+                }
+
+                foreach (var command in stale)
+                {
+                    command.Status = CommandStatus.Expired;
+                    command.StatusReason = "timeout";
+                    command.UpdatedAt = now;
+                }
+
+                await db.SaveChangesAsync(stoppingToken);
+                LogExpired(stale.Count);
+
+                var events = scope.ServiceProvider.GetRequiredService<DomainEventPublisher>();
+                foreach (var command in stale)
+                {
+                    await events.PublishAsync(new CommandUpdated(CommandDto.From(command)), stoppingToken);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

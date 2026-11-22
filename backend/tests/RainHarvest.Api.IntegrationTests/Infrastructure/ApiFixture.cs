@@ -38,6 +38,7 @@ public sealed class ApiFixture : IAsyncLifetime
 
     public const string AdminUsername = "admin";
     public const string AdminPassword = "admin-test-password";
+    public const string PanelOrigin = "http://localhost:5173";
 
     public string ConnectionString => _db.GetConnectionString();
 
@@ -60,6 +61,7 @@ public sealed class ApiFixture : IAsyncLifetime
             ["Jwt:SigningKey"] = "integration-test-signing-key-0123456789abcdef",
             ["Seed:AdminUsername"] = AdminUsername,
             ["Seed:AdminPassword"] = AdminPassword,
+            ["Cors:AllowedOrigins:0"] = PanelOrigin,
         };
 
         Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>

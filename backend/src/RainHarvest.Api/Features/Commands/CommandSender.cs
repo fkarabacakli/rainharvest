@@ -1,3 +1,4 @@
+using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Domain;
 using RainHarvest.Api.Infrastructure.Mqtt;
 using RainHarvest.Api.Infrastructure.Persistence;
@@ -10,7 +11,7 @@ namespace RainHarvest.Api.Features.Commands;
 /// endpoint and the irrigation rule, so both leave the same audit trail.
 /// The outcome arrives later through the device's MQTT <c>state</c>.
 /// </summary>
-public sealed class CommandSender(AppDbContext db, IMqttPublisher publisher, TimeProvider timeProvider)
+public sealed class CommandSender(AppDbContext db, IMqttPublisher publisher, DomainEventPublisher events, TimeProvider timeProvider)
 {
     /// <exception cref="MqttNotConnectedException">Broker unreachable; nothing was recorded.</exception>
     public async Task<DeviceCommand> SendAsync(
@@ -46,6 +47,7 @@ public sealed class CommandSender(AppDbContext db, IMqttPublisher publisher, Tim
         // state message must find the command.
         db.DeviceCommands.Add(command);
         await db.SaveChangesAsync(cancellationToken);
+        await events.PublishAsync(new CommandUpdated(CommandDto.From(command)), cancellationToken);
 
         try
         {
@@ -61,6 +63,7 @@ public sealed class CommandSender(AppDbContext db, IMqttPublisher publisher, Tim
             command.StatusReason = "publish_failed";
             command.UpdatedAt = timeProvider.GetUtcNow();
             await db.SaveChangesAsync(CancellationToken.None);
+            await events.PublishAsync(new CommandUpdated(CommandDto.From(command)), CancellationToken.None);
             throw;
         }
 

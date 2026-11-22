@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Common.Mqtt;
 using RainHarvest.Api.Domain;
 using RainHarvest.Api.Features.Devices;
@@ -18,6 +19,7 @@ namespace RainHarvest.Api.Features.Commands;
 public sealed partial class HandleDeviceState(
     AppDbContext db,
     DeviceTracker tracker,
+    DomainEventPublisher events,
     ILogger<HandleDeviceState> logger) : IMqttHandler
 {
     public async Task HandleAsync(MqttMessage message, CancellationToken cancellationToken)
@@ -49,6 +51,8 @@ public sealed partial class HandleDeviceState(
             .SetProperty(d => d.ValveOpen, state.ValveOpen)
             .SetProperty(d => d.Irrigating, state.Irrigating)
             .SetProperty(d => d.StateReportedAt, message.ReceivedAt), cancellationToken);
+        await events.PublishAsync(
+            new ActuatorStateChanged(deviceId, state.PumpOn, state.ValveOpen, state.Irrigating, message.ReceivedAt), cancellationToken);
 
         if (state.LastCommandId is { } rawId && Guid.TryParse(rawId, out var commandId) && ToStatus(state.LastCommandResult) is { } next)
         {
@@ -75,6 +79,7 @@ public sealed partial class HandleDeviceState(
         command.StatusReason = next == CommandStatus.Rejected ? reason ?? RejectReasons.Invalid : null;
         command.UpdatedAt = at;
         await db.SaveChangesAsync(cancellationToken);
+        await events.PublishAsync(new CommandUpdated(CommandDto.From(command)), cancellationToken);
     }
 
     /// <summary>

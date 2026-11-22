@@ -35,3 +35,21 @@ internal sealed class DeviceCommandConfiguration : IEntityTypeConfiguration<Devi
         builder.HasOne<Device>().WithMany().HasForeignKey(c => c.DeviceId).OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+internal sealed class AlertConfiguration : IEntityTypeConfiguration<Alert>
+{
+    public void Configure(EntityTypeBuilder<Alert> builder)
+    {
+        builder.HasKey(a => a.Id);
+        builder.Property(a => a.DeviceId).HasMaxLength(Device.MaxIdLength);
+        builder.Property(a => a.Type).HasConversion<string>().HasMaxLength(32);
+        builder.Property(a => a.Severity).HasConversion<string>().HasMaxLength(16);
+        builder.Property(a => a.Message).HasMaxLength(256);
+
+        // One open alert per device and type: repeated bad readings cannot pile up.
+        builder.HasIndex(a => new { a.DeviceId, a.Type }).IsUnique().HasFilter("resolved_at IS NULL");
+        builder.HasIndex(a => a.RaisedAt);
+
+        builder.HasOne<Device>().WithMany().HasForeignKey(a => a.DeviceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}

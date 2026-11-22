@@ -1,4 +1,5 @@
 using System.Text;
+using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Common.Mqtt;
 using RainHarvest.Api.Domain;
 using RainHarvest.Api.Features.Settings;
@@ -14,6 +15,7 @@ namespace RainHarvest.Api.Features.Devices;
 public sealed partial class HandleDeviceStatus(
     DeviceTracker tracker,
     DeviceSettingsService settings,
+    DomainEventPublisher events,
     ILogger<HandleDeviceStatus> logger) : IMqttHandler
 {
     public async Task HandleAsync(MqttMessage message, CancellationToken cancellationToken)
@@ -39,9 +41,11 @@ public sealed partial class HandleDeviceStatus(
                 // Re-send thresholds on every (re)connect: covers a new or reflashed
                 // device and a config update made while the broker was unreachable.
                 await settings.PublishConfigAsync(await settings.GetEffectiveAsync(deviceId, cancellationToken), cancellationToken);
+                await events.PublishAsync(new DeviceStatusChanged(deviceId, true, message.ReceivedAt), cancellationToken);
                 break;
             case DeviceStatus.Offline:
                 await tracker.MarkOfflineAsync(deviceId, message.ReceivedAt, cancellationToken);
+                await events.PublishAsync(new DeviceStatusChanged(deviceId, false, message.ReceivedAt), cancellationToken);
                 break;
             default:
                 LogUnknownStatus(deviceId, status);

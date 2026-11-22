@@ -6,6 +6,7 @@ using RainHarvest.Api.Common.Endpoints;
 using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Common.Health;
 using RainHarvest.Api.Features;
+using RainHarvest.Api.Features.Live;
 using RainHarvest.Api.Infrastructure.Auth;
 using RainHarvest.Api.Infrastructure.Mqtt;
 using RainHarvest.Api.Infrastructure.OpenApi;
@@ -36,6 +37,19 @@ builder.Services.AddMqtt(builder.Configuration, typeof(Program).Assembly);
 builder.Services.AddEndpoints(typeof(Program).Assembly);
 builder.Services.AddFeatureServices();
 builder.Services.AddDomainEvents(typeof(Program).Assembly);
+// The panel runs on its own origin. The SignalR JS client negotiates with
+// withCredentials: true by default, which browsers only allow if the response
+// says Allow-Credentials. Safe here: auth is a bearer token, never a cookie, so
+// there is nothing for a cross-site request to ride on. Origins stay explicit.
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(o => o.AddDefaultPolicy(policy => policy
+    .WithOrigins(allowedOrigins)
+    .AllowAnyHeader()
+    .AllowAnyMethod()
+    .AllowCredentials()));
+
+builder.Services.AddSignalR()
+    .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<AppDbContext>("database")
@@ -45,6 +59,7 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -64,9 +79,12 @@ if (app.Environment.IsDevelopment())
 
 await app.ApplyMigrationsIfEnabledAsync();
 await app.SeedAdminIfConfiguredAsync();
+await app.SeedDemoDataIfConfiguredAsync();
 
 app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = HealthResponseWriter.WriteAsync })
     .AllowAnonymous();
+
+app.MapHub<LiveHub>(LiveHub.Path);
 
 app.MapGroup("/api/v1")
     .AddEndpointFilterFactory(DeviceAccess.FilterFactory)

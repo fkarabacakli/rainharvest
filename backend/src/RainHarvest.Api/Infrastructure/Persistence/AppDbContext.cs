@@ -19,6 +19,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
 
+    public DbSet<Alert> Alerts => Set<Alert>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Creates the extension in the first migration. Hypertables, continuous

@@ -42,7 +42,14 @@ public static class DeviceAccess
                 return await next(invocation);
             }
 
-            var deviceId = http.GetRouteValue(RouteParameter) as string ?? "";
+            // Only a {deviceId} route segment selects a device. A "deviceId" query
+            // filter (e.g. GET /alerts?deviceId=) is applied inside the handler's
+            // own visibility-restricted query instead.
+            if (http.GetRouteValue(RouteParameter) is not string deviceId)
+            {
+                return await next(invocation);
+            }
+
             var db = http.RequestServices.GetRequiredService<AppDbContext>();
             var allowed = await db.Devices.VisibleTo(db, user).AnyAsync(d => d.Id == deviceId, http.RequestAborted);
 

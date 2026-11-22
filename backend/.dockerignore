@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+**/.vs/
+**/*.user
+tests/
+.env
+docker/
+docs/
+*.md

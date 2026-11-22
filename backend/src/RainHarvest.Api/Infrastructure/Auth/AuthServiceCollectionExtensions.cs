@@ -37,6 +37,22 @@ public static class AuthServiceCollectionExtensions
                     RoleClaimType = AuthClaims.Role,
                     ClockSkew = TimeSpan.FromSeconds(30),
                 };
+
+                // Browsers cannot set headers on WebSocket requests, so SignalR
+                // sends the token as ?access_token=... — accept it for hubs only.
+                bearer.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        if (context.HttpContext.Request.Path.StartsWithSegments("/hubs") &&
+                            context.Request.Query["access_token"] is [{ Length: > 0 } token])
+                        {
+                            context.Token = token;
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                };
             });
 
         services.AddAuthorizationBuilder()

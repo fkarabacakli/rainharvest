@@ -1,3 +1,4 @@
+using RainHarvest.Api.Features.Alerts;
 using RainHarvest.Api.Features.Auth;
 using RainHarvest.Api.Features.Commands;
 using RainHarvest.Api.Features.Devices;
@@ -14,6 +15,7 @@ public static class FeatureServices
         services.AddScoped<CredentialVerifier>();
         services.AddScoped<DeviceSettingsService>();
         services.AddScoped<CommandSender>();
+        services.AddScoped<AlertService>();
         services.AddHostedService<CommandTimeoutWorker>();
         return services;
     }

@@ -2,7 +2,7 @@
 
 > Firmware (ESP32), backend ve simülatör arasındaki sözleşme.
 > Kod karşılıkları `src/RainHarvest.Contracts` projesinde; JSON örnekleri birim testlerle sabitlenmiş durumda (`TelemetryPayloadJsonTests`).
-> Durum: `telemetry` ve `status` **kesin** (M1). `cmd`, `state` ve `config` **taslak** (M3'te kesinleşecek).
+> Durum: tüm topic'ler **kesin** (`telemetry`, `status`: M1; `cmd`, `state`, `config`: M3).
 
 ## Bağlantı
 
@@ -32,9 +32,9 @@ Bağlandıktan hemen sonra cihaz `rainwater/<deviceId>/status` topic'ine `online
 |---|---|---|---|---|---|
 | `rainwater/<id>/telemetry` | cihaz → | 0 veya 1 | hayır | JSON, aşağıda | kesin |
 | `rainwater/<id>/status` | cihaz → | 1 | **evet** | düz metin: `online` / `offline` | kesin |
-| `rainwater/<id>/state` | cihaz → | 1 | evet | pompa/valf durumu + `lastCommandId` | taslak (M3) |
-| `rainwater/<id>/cmd` | → cihaz | 1 | hayır | `irrigate` ve bakım komutları | taslak (M3) |
-| `rainwater/<id>/config` | → cihaz | 1 | evet | eşik ayarları | taslak (M3) |
+| `rainwater/<id>/state` | cihaz → | 1 | evet | JSON, aşağıda | kesin |
+| `rainwater/<id>/cmd` | → cihaz | 1 | hayır | JSON, aşağıda | kesin |
+| `rainwater/<id>/config` | → cihaz | 1 | evet | JSON, aşağıda | kesin |
 
 ## `telemetry`
 
@@ -83,12 +83,61 @@ Düz metin, büyük-küçük harf duyarsız: `online` veya `offline`.
 - Boş retained mesaj, retained durumu temizler; backend bunu yok sayar.
 - Gelen her `telemetry` mesajı da cihazı online sayar.
 
-## `cmd`, `state`, `config` (taslak, M3)
+## `cmd` (backend → cihaz, QoS 1, retain yok)
 
-Ayrıntılar M3'te bu dosyaya eklenecek. Şu an üzerinde anlaşılan noktalar:
+```json
+{"commandId": "0193a0b4-…", "action": "irrigate", "durationS": 60}
+```
 
-- Komutlar `commandId` taşır. Cihaz sonucu `state` mesajında `lastCommandId` ile bildirir.
-- `{"commandId":"…","action":"irrigate","durationS":60}`: sulama sırasını (valf aç → pompa → pompa durdur → valf kapat) **cihaz** yürütür.
-- Bakım komutları: `{"commandId":"…","actuator":"pump"|"valve","action":"on"|"off"|"open"|"close"}`.
-- Cihaz güvenlik kurallarına aykırı komutları reddeder: depo boşsa, su kalitesi kötüyse ya da valf kapalıyken pompa açılmak isteniyorsa.
-- `config`, retained eşik değerlerini taşır: pH aralığı, bulanıklık limiti, seviye limitleri, maksimum pompa süresi.
+| `action` | `durationS` | Cihazın yapması gereken |
+|---|---|---|
+| `irrigate` | zorunlu | Valf aç → pompa çalıştır → süre dolunca pompa durdur → valf kapat |
+| `stop` | — | Çalışan sulamayı ya da pompayı durdur, valfi kapat |
+| `pump_on` | zorunlu | Bakım: pompayı çalıştır (valf açık olmalı) |
+| `pump_off` | — | Bakım: pompayı durdur |
+| `valve_open` | — | Bakım: valfi aç |
+| `valve_close` | — | Bakım: valfi kapat (pompa çalışıyorsa reddet) |
+
+Süre her zaman `config.pumpMaxS` ile sınırlanır. Bilinmeyen alanlar yok sayılır.
+
+**Cihaz şu durumlarda komutu reddeder** (`state.reason` olarak yazılır):
+
+| `reason` | Ne zaman |
+|---|---|
+| `tank_empty` | Depo `config.levelMinPct` altında |
+| `water_quality` | pH `config.phMin`–`phMax` dışında ya da bulanıklık `config.turbidityMaxNtu` üstünde |
+| `valve_closed` | Valf kapalıyken `pump_on` |
+| `pump_running` | Pompa çalışırken `valve_close` |
+| `busy` | Zaten sulama ya da pompa çalışıyor |
+| `invalid` | Eksik/hatalı süre, bilinmeyen `action`, henüz sensör okuması yok |
+
+## `state` (cihaz → backend, QoS 1, **retain**)
+
+Her değişiklikte ve her bağlantıdan sonra yayınlanır. Pompa ve valf durumunun doğruluk kaynağı cihazdır.
+
+```json
+{"pumpOn": true, "valveOpen": true, "irrigating": true,
+ "lastCommandId": "0193a0b4-…", "lastCommandResult": "accepted", "reason": null}
+```
+
+| Alan | Açıklama |
+|---|---|
+| `pumpOn`, `valveOpen`, `irrigating` | Güncel durum (zorunlu) |
+| `lastCommandId` | Bu değişikliğin yanıt verdiği komut (opsiyonel) |
+| `lastCommandResult` | `accepted` (başladı), `rejected` (reddedildi), `completed` (bitti ya da durduruldu) |
+| `reason` | `rejected` için yukarıdaki tablodan; `completed` için depo boşalıp erken durduysa `tank_empty` |
+
+**Akış örneği** (`irrigate`): komut gelir → `accepted` ile `{pumpOn: true, valveOpen: true, irrigating: true}` → süre dolar → `completed` ile hepsi `false`. `stop` gelirse önce yarıda kalan komut için `completed`, sonra `stop`'un kendisi için `completed` yayınlanır.
+
+Backend komut durumunu yalnızca ileri taşır (`Sent → Accepted → Completed`). Bu yüzden retained mesajın tekrar gelmesi sorun çıkarmaz. 30 saniye içinde yanıt alamadığı komutu `Expired` sayar; geç gelen bir yanıt bunu düzeltir.
+
+## `config` (backend → cihaz, QoS 1, **retain**)
+
+```json
+{"phMin": 6.0, "phMax": 8.5, "turbidityMaxNtu": 25, "levelMinPct": 15, "pumpMaxS": 300}
+```
+
+- Cihazın kendi güvenlik sınırları. Backend'e ulaşılamasa bile bunları uygulamalı.
+- Backend bu mesajı ayarlar değiştiğinde ve cihaz her `online` olduğunda yeniden yayınlar.
+- Cihaz bir config almadan önce yukarıdaki değerleri firmware varsayılanı olarak kullanmalı.
+- Simülatördeki `DeviceController` sınıfı bu kuralların çalışan bir örneği; birim testleri (`DeviceControllerTests`) beklenen davranışı adım adım gösteriyor.

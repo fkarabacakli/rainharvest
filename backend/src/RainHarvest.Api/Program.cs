@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.OpenApi;
 using RainHarvest.Api.Common.Auth;
 using RainHarvest.Api.Common.Endpoints;
+using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Common.Health;
 using RainHarvest.Api.Features;
 using RainHarvest.Api.Infrastructure.Auth;
@@ -34,6 +35,7 @@ builder.Services.AddJwtAuth(builder.Configuration);
 builder.Services.AddMqtt(builder.Configuration, typeof(Program).Assembly);
 builder.Services.AddEndpoints(typeof(Program).Assembly);
 builder.Services.AddFeatureServices();
+builder.Services.AddDomainEvents(typeof(Program).Assembly);
 
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<AppDbContext>("database")

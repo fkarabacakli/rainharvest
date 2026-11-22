@@ -24,5 +24,14 @@ public sealed partial class Device
 
     public DateTimeOffset? LastSeenAt { get; set; }
 
+    // Actuator state as last reported by the device (MQTT "state"); the device is the source of truth.
+    public bool PumpOn { get; set; }
+
+    public bool ValveOpen { get; set; }
+
+    public bool Irrigating { get; set; }
+
+    public DateTimeOffset? StateReportedAt { get; set; }
+
     public DateTimeOffset CreatedAt { get; init; }
 }

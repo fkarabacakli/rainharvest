@@ -34,6 +34,10 @@ namespace RainHarvest.Api.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<bool>("Irrigating")
+                        .HasColumnType("boolean")
+                        .HasColumnName("irrigating");
+
                     b.Property<bool>("IsOnline")
                         .HasColumnType("boolean")
                         .HasColumnName("is_online");
@@ -48,9 +52,21 @@ namespace RainHarvest.Api.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("name");
 
+                    b.Property<bool>("PumpOn")
+                        .HasColumnType("boolean")
+                        .HasColumnName("pump_on");
+
                     b.Property<Guid?>("SiteId")
                         .HasColumnType("uuid")
                         .HasColumnName("site_id");
+
+                    b.Property<DateTimeOffset?>("StateReportedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("state_reported_at");
+
+                    b.Property<bool>("ValveOpen")
+                        .HasColumnType("boolean")
+                        .HasColumnName("valve_open");
 
                     b.HasKey("Id")
                         .HasName("pk_devices");
@@ -59,6 +75,137 @@ namespace RainHarvest.Api.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_devices_site_id");
 
                     b.ToTable("devices", (string)null);
+                });
+
+            modelBuilder.Entity("RainHarvest.Api.Domain.DeviceCommand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("action");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DeviceId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("device_id");
+
+                    b.Property<int?>("DurationS")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_s");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid?>("RequestedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("requested_by");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("source");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StatusReason")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status_reason");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_device_commands");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_device_commands_created_at")
+                        .HasFilter("status = 'Sent'");
+
+                    b.HasIndex("DeviceId", "CreatedAt")
+                        .HasDatabaseName("ix_device_commands_device_id_created_at");
+
+                    b.ToTable("device_commands", (string)null);
+                });
+
+            modelBuilder.Entity("RainHarvest.Api.Domain.DeviceSettings", b =>
+                {
+                    b.Property<string>("DeviceId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("device_id");
+
+                    b.Property<bool>("AutoIrrigation")
+                        .HasColumnType("boolean")
+                        .HasColumnName("auto_irrigation");
+
+                    b.Property<int>("IrrigationCooldownS")
+                        .HasColumnType("integer")
+                        .HasColumnName("irrigation_cooldown_s");
+
+                    b.Property<int>("IrrigationDurationS")
+                        .HasColumnType("integer")
+                        .HasColumnName("irrigation_duration_s");
+
+                    b.Property<double>("LevelMinPct")
+                        .HasColumnType("double precision")
+                        .HasColumnName("level_min_pct");
+
+                    b.Property<double>("PhMax")
+                        .HasColumnType("double precision")
+                        .HasColumnName("ph_max");
+
+                    b.Property<double>("PhMin")
+                        .HasColumnType("double precision")
+                        .HasColumnName("ph_min");
+
+                    b.Property<int>("PumpMaxS")
+                        .HasColumnType("integer")
+                        .HasColumnName("pump_max_s");
+
+                    b.Property<double>("SoilDryPct")
+                        .HasColumnType("double precision")
+                        .HasColumnName("soil_dry_pct");
+
+                    b.Property<double>("SoilWetPct")
+                        .HasColumnType("double precision")
+                        .HasColumnName("soil_wet_pct");
+
+                    b.Property<double>("TurbidityMaxNtu")
+                        .HasColumnType("double precision")
+                        .HasColumnName("turbidity_max_ntu");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("DeviceId")
+                        .HasName("pk_device_settings");
+
+                    b.ToTable("device_settings", (string)null);
                 });
 
             modelBuilder.Entity("RainHarvest.Api.Domain.Reading", b =>
@@ -214,6 +361,26 @@ namespace RainHarvest.Api.Infrastructure.Persistence.Migrations
                         .HasForeignKey("SiteId")
                         .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("fk_devices_sites_site_id");
+                });
+
+            modelBuilder.Entity("RainHarvest.Api.Domain.DeviceCommand", b =>
+                {
+                    b.HasOne("RainHarvest.Api.Domain.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_device_commands_devices_device_id");
+                });
+
+            modelBuilder.Entity("RainHarvest.Api.Domain.DeviceSettings", b =>
+                {
+                    b.HasOne("RainHarvest.Api.Domain.Device", null)
+                        .WithOne()
+                        .HasForeignKey("RainHarvest.Api.Domain.DeviceSettings", "DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_device_settings_devices_device_id");
                 });
 
             modelBuilder.Entity("RainHarvest.Api.Domain.Reading", b =>

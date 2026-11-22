@@ -38,7 +38,9 @@ Console.WriteLine(
     $"every {options.Interval.TotalSeconds:0.#}s at {options.Speed}x. Ctrl+C to stop.");
 
 var baseSeed = options.Seed ?? Environment.TickCount;
-var devices = options.Devices.Select((id, i) => new SimulatedDevice(id, options, baseSeed + i)).ToList();
+var scenario = Scenario.All[options.Scenario];
+Console.WriteLine($"Scenario '{scenario.Name}': {scenario.Description}.");
+var devices = options.Devices.Select((id, i) => new SimulatedDevice(id, options, scenario, baseSeed + i)).ToList();
 try
 {
     await Task.WhenAll(devices.Select(d => d.RunAsync(stopping.Token)));

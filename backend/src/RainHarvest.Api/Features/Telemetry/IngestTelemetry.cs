@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RainHarvest.Api.Common.Events;
 using RainHarvest.Api.Common.Mqtt;
 using RainHarvest.Api.Domain;
 using RainHarvest.Api.Features.Devices;
@@ -17,6 +18,7 @@ namespace RainHarvest.Api.Features.Telemetry;
 public sealed partial class IngestTelemetry(
     AppDbContext db,
     DeviceTracker tracker,
+    DomainEventPublisher events,
     ILogger<IngestTelemetry> logger) : IMqttHandler
 {
     /// <summary>Device timestamps before this mean the ESP32 has not synced NTP yet.</summary>
@@ -61,7 +63,7 @@ public sealed partial class IngestTelemetry(
 
         // The key is (device_id, received_at); a second row with the exact same
         // timestamp is a duplicate and is skipped rather than failing the handler.
-        await db.Database.ExecuteSqlAsync(
+        var inserted = await db.Database.ExecuteSqlAsync(
             $"""
             INSERT INTO readings (device_id, received_at, device_ts, level_pct, level_cm, turbidity_ntu, ph,
                                   water_temp_c, raining, soil_pct, flow_lpm, flow_total_l, rssi)
@@ -71,6 +73,29 @@ public sealed partial class IngestTelemetry(
             ON CONFLICT DO NOTHING
             """,
             cancellationToken);
+
+        if (inserted == 0)
+        {
+            return; // duplicate; rules already ran for it
+        }
+
+        var reading = new Reading
+        {
+            DeviceId = deviceId,
+            ReceivedAt = receivedAt,
+            DeviceTs = deviceTs,
+            LevelPct = payload.LevelPct,
+            LevelCm = payload.LevelCm,
+            TurbidityNtu = payload.TurbidityNtu,
+            Ph = payload.Ph,
+            WaterTempC = payload.WaterTempC,
+            Raining = payload.Raining,
+            SoilPct = payload.SoilPct,
+            FlowLpm = payload.FlowLpm,
+            FlowTotalL = payload.FlowTotalL,
+            Rssi = payload.Rssi,
+        };
+        await events.PublishAsync(new TelemetryReceived(reading), cancellationToken);
     }
 
     private static DateTimeOffset? ToDeviceTime(long? unixSeconds, DateTimeOffset receivedAt)

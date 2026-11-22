@@ -1,5 +1,7 @@
 using RainHarvest.Api.Features.Auth;
+using RainHarvest.Api.Features.Commands;
 using RainHarvest.Api.Features.Devices;
+using RainHarvest.Api.Features.Settings;
 
 namespace RainHarvest.Api.Features;
 
@@ -10,6 +12,9 @@ public static class FeatureServices
     {
         services.AddScoped<DeviceTracker>();
         services.AddScoped<CredentialVerifier>();
+        services.AddScoped<DeviceSettingsService>();
+        services.AddScoped<CommandSender>();
+        services.AddHostedService<CommandTimeoutWorker>();
         return services;
     }
 }

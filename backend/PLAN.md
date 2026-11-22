@@ -80,12 +80,12 @@ backend/
 │  │  │  ├─ Users/         CreateUser, ListUsers
 │  │  │  ├─ Devices/       HandleDeviceStatus (MQTT), ListDevices, GetDevice
 │  │  │  ├─ Telemetry/     IngestTelemetry (MQTT), GetLatestReading, GetReadingHistory, ExportReadingsCsv
-│  │  │  ├─ Actuators/     SendCommand, HandleActuatorState (MQTT), ListActuatorEvents
+│  │  │  ├─ Commands/      SendCommand, HandleDeviceState (MQTT), ListCommands, GetCommand, CommandTimeoutWorker
 │  │  │  ├─ Settings/      GetSettings, UpdateSettings
 │  │  │  ├─ Rules/         IrrigationRule, WaterQualityRule
 │  │  │  ├─ Alerts/        RaiseAlert, ListAlerts, AcknowledgeAlert
 │  │  │  └─ Live/          LiveHub
-│  │  ├─ Domain/           Device, Reading, ActuatorEvent, DeviceSettings, Alert, User
+│  │  ├─ Domain/           Device, Reading, DeviceCommand, DeviceSettings, Site, User (Alert: M4)
 │  │  ├─ Infrastructure/
 │  │  │  ├─ Persistence/   AppDbContext, Migrations (Timescale SQL'i dahil), Seed
 │  │  │  ├─ Mqtt/          MqttWorker, MqttPublisher, MqttOptions, TopicRouter
@@ -128,8 +128,9 @@ Tümü `/api/v1` altında. Panel ekibi `/openapi/v1.json` üzerinden client üre
 | GET | `/devices/{id}/readings` | cihaza erişimi olan | Ham okumalar: `from`, `to` (en fazla 24 saat), `limit`; devamı varsa `nextFrom` döner |
 | GET | `/devices/{id}/readings/aggregate` | cihaza erişimi olan | Gruplanmış istatistik: `bucket` = 1m (≤7 gün), 15m (≤90 gün), 1h (≤400 gün), `from`, `to` |
 | GET | `/devices/{id}/readings/export.csv` | cihaza erişimi olan | CSV |
-| POST | `/devices/{id}/commands` | cihaza erişimi olan | `{action: "irrigate", durationS}` ya da bakım için `{actuator: "pump"/"valve", action}` → **202** `{commandId}` |
-| GET | `/devices/{id}/actuator-events` | cihaza erişimi olan | Sayfalı geçmiş |
+| POST | `/devices/{id}/commands` | cihaza erişimi olan | `{action, durationS?}`; action = `irrigate`, `stop`, `pump_on`, `pump_off`, `valve_open`, `valve_close` → **202** + komut (status `Sent`). Cihaz offline: **409**, broker yok: **503** |
+| GET | `/devices/{id}/commands` | cihaza erişimi olan | Komut geçmişi, yeniden eskiye (`limit`, varsayılan 50) |
+| GET | `/devices/{id}/commands/{commandId}` | cihaza erişimi olan | Tek komut ve durumu: `Sent`, `Accepted`, `Rejected`, `Completed`, `Expired` |
 | GET | `/devices/{id}/settings` | cihaza erişimi olan | Eşikler |
 | PUT | `/devices/{id}/settings` | Admin | Eşikleri güncelle → retained `config` yayınla |
 | GET | `/alerts` | giriş yapmış | Erişebildiği cihazların uyarıları; `status=open/acknowledged`, sayfalı |
@@ -140,7 +141,7 @@ Tümü `/api/v1` altında. Panel ekibi `/openapi/v1.json` üzerinden client üre
 
 **"Cihaza erişimi olan"** = Admin ya da cihazın mahaline üye olan kullanıcı. Erişimi olmayan biri için yanıt **404**'tür, 403 değil; böylece başkasının cihazının var olup olmadığı anlaşılmaz.
 
-**Komutlar neden 202 dönüyor?** Komut MQTT'ye iletilir, ama sonucunu cihaz belirler. Cihaz `state` mesajında `lastCommandId` ile yanıt verir. Panel sonucu SignalR'dan `ActuatorStateChanged` olarak görür. Cihaz offline ise backend **409** döner.
+**Komutlar neden 202 dönüyor?** Komut MQTT'ye iletilir, ama sonucunu cihaz belirler. Cihaz `state` mesajında `lastCommandId` ile yanıt verir. Panel sonucu şimdilik `GET .../commands/{commandId}` ile, M4'ten itibaren SignalR'dan `CommandUpdated` olarak görür. Cihaz offline ise backend **409** döner.
 
 ## 5. Kimlik doğrulama ve yetki
 
@@ -166,7 +167,8 @@ Hub: `/hubs/live`. Bağlanan kullanıcı, üyesi olduğu **her mahalin grubuna o
 | Event | Payload |
 |---|---|
 | `ReadingReceived` | Okuma DTO'su |
-| `ActuatorStateChanged` | `{deviceId, pump, valve, lastCommandId, at}` |
+| `ActuatorStateChanged` | `{deviceId, pumpOn, valveOpen, irrigating, at}` |
+| `CommandUpdated` | Komut DTO'su (durum değiştiğinde) |
 | `DeviceStatusChanged` | `{deviceId, isOnline, at}` |
 | `AlertRaised` | Uyarı DTO'su |
 
@@ -181,8 +183,9 @@ Ayrıntılar `docs/realtime.md` dosyasında yazılacak (M4).
   - Cihaz başka mahale taşınırsa geçmiş verisi cihazla birlikte gider.
 - **Reading** (hypertable): DeviceId, ReceivedAt, DeviceTs, LevelPct, LevelCm, TurbidityNtu, Ph, WaterTempC?, Raining, SoilPct, FlowLpm, FlowTotalL, Rssi
   - PK: `(DeviceId, ReceivedAt)`. Ayrı Id yok (bkz. TimescaleDB kullanımı).
-- **ActuatorEvent:** Id, DeviceId, At, Actuator (Pump/Valve), Kind (CommandSent/StateReported), Value, Source (Manual/Rule/Device), CommandId?, Reason?, UserId?
-- **DeviceSettings:** DeviceId, PhMin, PhMax, TurbidityMax, LevelMinPct, LevelMaxPct, SoilDryPct, SoilWetPct, PumpMaxS, IrrigationCooldownS, UpdatedAt, UpdatedBy
+- **Device** ayrıca cihazın son bildirdiği eyleyici durumunu tutar: PumpOn, ValveOpen, Irrigating, StateReportedAt.
+- **DeviceCommand:** Id, DeviceId, Action, DurationS?, Source (Manual/Rule), RequestedBy?, Reason? (kuralın gerekçesi), Status (Sent/Accepted/Rejected/Completed/Expired), StatusReason?, CreatedAt, UpdatedAt. Komut geçmişi ve denetim izi bu tablodadır (ayrı bir ActuatorEvent tablosu yerine).
+- **DeviceSettings:** DeviceId, PhMin, PhMax, TurbidityMaxNtu, LevelMinPct, SoilDryPct, SoilWetPct, IrrigationDurationS, IrrigationCooldownS, PumpMaxS, AutoIrrigation, UpdatedAt, UpdatedBy. Satır yoksa varsayılanlar geçerlidir (pH 6–8.5, bulanıklık ≤25, seviye ≥%15, toprak %30/%60, 60 sn sulama, 10 dk bekleme, pompa ≤300 sn).
 - **Alert:** Id, DeviceId, Type, Severity, Message, RaisedAt, AcknowledgedAt?, AcknowledgedBy?
 
 **Hacim:** 10 saniyede bir okuma, cihaz başına günde yaklaşık 8.6 bin, yılda yaklaşık 3.1 milyon satır.
@@ -210,11 +213,13 @@ Ayrıntılar `docs/realtime.md` dosyasında yazılacak (M4).
 
 Kurallar saf fonksiyon olarak yazılır: `(okuma, ayarlar, son durum, şimdi) → karar`. Testlerin büyük kısmı burada olur.
 
-- **Sulama:** `SoilPct < SoilDryPct` ise `irrigate` komutu gönderilir (`durationS` ayardan gelir). `SoilWetPct` eşiği histerezis sağlar. `IrrigationCooldownS` dolmadan yeni sulama yapılmaz. Şu durumlarda sulama **yapılmaz** ve gerekçesi kaydedilir:
-  - depo `LevelMinPct` altında (uyarı üretilir)
-  - su kalitesi kötü (aşağıya bakın)
-  - yağmur yağıyor (`raining = true`)
-- **Su kalitesi:** pH aralık dışında ya da bulanıklık limit üstündeyse `WaterQualityBad` uyarısı üretilir ve otomatik sulama durdurulur. Cihaz da kendi tarafında sulamayı engeller (çift koruma). Kirli su depoya girebildiği için uyarı mesajı kullanıcıyı depoyu kontrol etmeye yönlendirmeli.
+- **Sulama** (`Features/Rules/IrrigationRule.cs`, her kaydedilen okumada çalışır):
+  - `SoilPct < SoilDryPct` ise `irrigate` gönderilir (`durationS` = `IrrigationDurationS`). Komut manuel komutla aynı yoldan gider; kaynağı `Rule`, gerekçesi ("soil 22% < 30%") kaydedilir.
+  - Kural kendi başlattığı sulamayı `SoilPct ≥ SoilWetPct` olunca `stop` ile erken bitirir (histerezisin üst sınırı). Kullanıcının elle başlattığı sulamaya dokunmaz.
+  - Şu durumlarda sulama **yapılmaz**: otomatik sulama kapalı, yanıt bekleyen bir komut var, sulama zaten sürüyor, yağmur yağıyor, depo `LevelMinPct` altında, su kalitesi kötü, ya da son otomatik sulamadan beri `IrrigationCooldownS` dolmadı.
+  - Bekleme süresi, sonucu ne olursa olsun son otomatik `irrigate` komutundan sayılır. Böylece cihaz sürekli reddetse bile her okumada yeni komut gönderilmez.
+  - Ayrıca bir uyarı (depo boş, su kötü) M4'te eklenecek.
+- **Su kalitesi:** pH aralık dışında ya da bulanıklık limit üstündeyse otomatik sulama yapılmaz (M3); `WaterQualityBad` uyarısı M4'te üretilecek. Cihaz da kendi tarafında sulamayı engeller (çift koruma). Kirli su depoya girebildiği için uyarı mesajı kullanıcıyı depoyu kontrol etmeye yönlendirmeli.
 - **Cihaz offline:** LWT `offline` gelirse ya da 60 saniye telemetri gelmezse `DeviceOffline` uyarısı üretilir.
 - **Uyarı tekrarını bastırma:** Aynı cihaz ve aynı uyarı tipi için açık bir uyarı varsa yeni uyarı açılmaz. Durum düzelince uyarı otomatik kapanır (bu karar M3'te kesinleşecek).
 
@@ -224,9 +229,9 @@ Kurallar saf fonksiyon olarak yazılır: `(okuma, ayarlar, son durum, şimdi) �
 
 - Telemetriyi 10 saniyede bir gönderir. Aralık ayarlanabilir; hızlandırılmış mod vardır.
 - Bağlanırken LWT (`offline`) tanımlar, bağlanınca `online` yayınlar.
-- `cmd` mesajlarını dinler. `irrigate` geldiğinde valf aç → pompa çalıştır → süre dolunca pompa durdur → valf kapat sırasını uygular. Sulama sırasında depo seviyesi düşer, akış artar, toprak nemi yükselir. Her adımda `state` ile `lastCommandId` yayınlar.
-- `config` mesajını dinler ve cihaz tarafı güvenlik kurallarını taklit eder: depo boşsa ya da su kötüyse sulamayı reddeder, kapalı valfe karşı pompa komutunu reddeder.
-- **Senaryolar** (`--scenario`): `normal`, `rain` (seviye yükselir), `bad-water` (pH ve bulanıklık bozulur), `drought` (toprak kurur, depo boşalır), `flaky` (bağlantı kopar ve geri gelir)
+- Firmware'in yapması gerekeni `DeviceController` sınıfında taklit eder (`docs/mqtt.md`): `cmd` ve `config` dinler, sulama sırasını ve pompa/valf kilitlemesini uygular, güvenlik sınırlarına aykırı komutları reddeder, her değişiklikte retained `state` yayınlar.
+- Fizik: 200 L depo, sulamada 4 L/dk akış; depo seviyesi düşer, toprak nemi artar, `flowTotalL` sayacı ilerler. Süreler simülasyon zamanındadır (`--speed`).
+- **Senaryolar** (`--scenario`): `normal` (saatlik sağanak), `rain` (sürekli yağmur), `drought` (yağmur yok, toprak hızlı kurur: backend otomatik sular), `bad-water` (pH ~5.2, bulanıklık ~60: sulama engellenir), `flaky` (bağlantı ~45 sn'de bir LWT ile kopar, 10 sn sonra döner)
 - Birden fazla cihaz: `--devices node1,node2`
 - Hem backend'in uçtan uca testinde hem de panel ekibinin donanımsız geliştirmesinde kullanılır.
 
@@ -290,13 +295,20 @@ Her biri **"bitti" tanımıyla** birlikte:
 
 ## 14. Açık noktalar
 
-- Firmware ekibiyle MQTT payload'ının onaylanması (özellikle `lastCommandId`, `config` alanları ve `irrigate` komutu)
-- Firmware'in sulama sırasını ve pompa/valf kilitlemesini uyguladığının teyidi
+- Firmware ekibinin `docs/mqtt.md`'deki kesinleşen `cmd`/`state`/`config` sözleşmesini onaylaması; `DeviceControllerTests` beklenen davranışı gösteriyor
 - Uyarıların otomatik kapanıp kapanmayacağı (M3)
 - Yeniden bağlanmada kalıcı MQTT oturumu kullanılıp kullanılmayacağı (M3)
 - Cihaz id'si fabrikada mı yüklenecek, MAC'ten mi türetilecek (firmware ekibi). MAC seçilirse `esp_efuse_mac_get_default` kullanılmalı, bayt sırası kutudaki etiketle aynı olmalı
 
 ## 15. Mevcut durum
+
+**M3 tamamlandı** (2026-11-22):
+- `cmd`, `state` ve `config` sözleşmesi kesinleşti ([docs/mqtt.md](docs/mqtt.md)).
+- Komutlar: `POST /devices/{id}/commands` (202), geçmiş ve tek komut sorgusu. Cihazın `state` yanıtı komut durumunu ileri taşır; 30 sn yanıtsız komut `Expired` olur.
+- Ayarlar: `GET`/`PUT /devices/{id}/settings`. Değişince ve cihaz her online olduğunda retained `config` yayınlanır.
+- Sulama kuralı saf fonksiyon olarak yazıldı ve uygulama içi `TelemetryReceived` olayıyla tetikleniyor.
+- Simülatör firmware mantığını, fiziği ve 5 senaryoyu taklit ediyor.
+- Gerçek ortamda doğrulandı: `drought` cihazında toprak %29.8'e düşünce backend sulamayı başlattı (Sent → Accepted → Completed, 4 L su). `bad-water` cihazına otomatik komut gitmedi, elle gönderilen komutu cihaz `water_quality` ile reddetti. `flaky` cihazı LWT ile offline oldu ve geri geldi.
 
 **M2 tamamlandı** (2026-11-22):
 - JWT girişi (`/auth/token`, `/auth/me`), kullanıcılar, mahaller, üyelikler, cihaz önceden kaydı ve mahal ataması.

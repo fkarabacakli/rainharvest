@@ -122,7 +122,7 @@ Kök: `rainwater/<deviceId>/...` — örneğin `rainwater/node1/...`
 | `.../telemetry` | ESP32 → | 0 / hayır | Her 10 s, tüm sensörler (JSON) |
 | `.../state` | ESP32 → | 1 / evet | Pompa/valf durumu, mod, son hata |
 | `.../status` | ESP32 → | 1 / evet | `online` / `offline` (LWT) |
-| `.../cmd` | → ESP32 | 1 / hayır | `{"commandId":"…","action":"irrigate","durationS":60}` (sıralamayı cihaz yapar), bakım için `{"commandId":"…","actuator":"valve","action":"open"}` |
+| `.../cmd` | → ESP32 | 1 / hayır | `{"commandId":"…","action":"irrigate","durationS":60}` (sıralamayı cihaz yapar), bakım için `{"commandId":"…","action":"valve_open"}` |
 | `.../config` | → ESP32 | 1 / evet | Eşikler: pH aralığı, bulanıklık limiti, seviye limitleri |
 
 Telemetri örneği:

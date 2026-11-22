@@ -6,6 +6,8 @@ namespace RainHarvest.Api.Infrastructure.Mqtt;
 
 public interface IMqttPublisher
 {
+    bool IsConnected { get; }
+
     /// <summary>Publishes <paramref name="payload"/> as camelCase JSON with QoS 1.</summary>
     /// <exception cref="MqttNotConnectedException">The broker is not reachable right now.</exception>
     Task PublishJsonAsync<T>(string topic, T payload, bool retain, CancellationToken cancellationToken);
@@ -15,6 +17,8 @@ public sealed class MqttNotConnectedException() : Exception("The MQTT broker is 
 
 public sealed class MqttPublisher(MqttConnection connection) : IMqttPublisher
 {
+    public bool IsConnected => connection.IsConnected;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task PublishJsonAsync<T>(string topic, T payload, bool retain, CancellationToken cancellationToken)

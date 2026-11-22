@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Text;
+using System.Threading.Channels;
 using System.Text.Json;
 using MQTTnet;
 using MQTTnet.Protocol;
@@ -43,10 +45,14 @@ public static class TestHelpers
         new(levelPct, 38.5, 12, 6.9, true, 31, 0, 142.7, -61, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 18.4);
 }
 
-/// <summary>Publishes to the test broker the way a device would.</summary>
+/// <summary>
+/// Plays the device on the test broker: publishes like one and records what
+/// the backend sends to it (cmd, config).
+/// </summary>
 public sealed class TestDevice(ApiFixture fixture) : IAsyncDisposable
 {
     private readonly IMqttClient _client = new MqttClientFactory().CreateMqttClient();
+    private readonly Channel<(string Topic, string Payload)> _received = Channel.CreateUnbounded<(string, string)>();
 
     public async Task ConnectAsync()
     {
@@ -54,11 +60,54 @@ public sealed class TestDevice(ApiFixture fixture) : IAsyncDisposable
             .WithTcpServer(fixture.BrokerHost, fixture.BrokerPort)
             .WithClientId($"test-{Guid.NewGuid():N}")
             .Build();
+        _client.ApplicationMessageReceivedAsync += e =>
+        {
+            _received.Writer.TryWrite((e.ApplicationMessage.Topic, Encoding.UTF8.GetString(e.ApplicationMessage.Payload)));
+            return Task.CompletedTask;
+        };
         await _client.ConnectAsync(options);
+    }
+
+    /// <summary>Receive what the backend publishes to this device (cmd and config).</summary>
+    public Task ListenAsync(string deviceId) =>
+        _client.SubscribeAsync(new MqttClientFactory().CreateSubscribeOptionsBuilder()
+            .WithTopicFilter(MqttTopics.For(deviceId, MqttTopics.Command), MqttQualityOfServiceLevel.AtLeastOnce)
+            .WithTopicFilter(MqttTopics.For(deviceId, MqttTopics.Config), MqttQualityOfServiceLevel.AtLeastOnce)
+            .Build());
+
+    /// <summary>Next message on <paramref name="topic"/>, skipping others; throws after the timeout.</summary>
+    public async Task<T> ReceiveAsync<T>(string topic, TimeSpan? timeout = null)
+    {
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(10));
+        while (true)
+        {
+            var (t, payload) = await _received.Reader.ReadAsync(cts.Token);
+            if (t == topic)
+            {
+                return JsonSerializer.Deserialize<T>(payload, MqttJson.Options)!;
+            }
+        }
+    }
+
+    /// <summary>True if nothing arrives on <paramref name="topic"/> within <paramref name="window"/>.</summary>
+    public async Task<bool> NothingOnAsync(string topic, TimeSpan window)
+    {
+        try
+        {
+            await ReceiveAsync<JsonElement>(topic, window);
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            return true;
+        }
     }
 
     public Task PublishTelemetryAsync(string deviceId, TelemetryPayload payload) =>
         PublishAsync(MqttTopics.For(deviceId, MqttTopics.Telemetry), JsonSerializer.SerializeToUtf8Bytes(payload, MqttJson.Options));
+
+    public Task PublishStateAsync(string deviceId, StatePayload state) =>
+        PublishAsync(MqttTopics.For(deviceId, MqttTopics.State), JsonSerializer.SerializeToUtf8Bytes(state, MqttJson.Options), retain: true);
 
     public Task PublishRawAsync(string deviceId, string channel, string payload, bool retain = false) =>
         PublishAsync(MqttTopics.For(deviceId, channel), Encoding.UTF8.GetBytes(payload), retain);

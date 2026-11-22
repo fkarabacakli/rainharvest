@@ -1,6 +1,7 @@
 using System.Text;
 using RainHarvest.Api.Common.Mqtt;
 using RainHarvest.Api.Domain;
+using RainHarvest.Api.Features.Settings;
 using RainHarvest.Contracts;
 
 namespace RainHarvest.Api.Features.Devices;
@@ -10,7 +11,10 @@ namespace RainHarvest.Api.Features.Devices;
 /// "offline" usually comes from the broker as the device's Last Will.
 /// </summary>
 [MqttTopic(MqttTopics.Root + "/+/" + MqttTopics.Status)]
-public sealed partial class HandleDeviceStatus(DeviceTracker tracker, ILogger<HandleDeviceStatus> logger) : IMqttHandler
+public sealed partial class HandleDeviceStatus(
+    DeviceTracker tracker,
+    DeviceSettingsService settings,
+    ILogger<HandleDeviceStatus> logger) : IMqttHandler
 {
     public async Task HandleAsync(MqttMessage message, CancellationToken cancellationToken)
     {
@@ -31,6 +35,10 @@ public sealed partial class HandleDeviceStatus(DeviceTracker tracker, ILogger<Ha
         {
             case DeviceStatus.Online:
                 await tracker.MarkSeenAsync(deviceId, message.ReceivedAt, cancellationToken);
+
+                // Re-send thresholds on every (re)connect: covers a new or reflashed
+                // device and a config update made while the broker was unreachable.
+                await settings.PublishConfigAsync(await settings.GetEffectiveAsync(deviceId, cancellationToken), cancellationToken);
                 break;
             case DeviceStatus.Offline:
                 await tracker.MarkOfflineAsync(deviceId, message.ReceivedAt, cancellationToken);

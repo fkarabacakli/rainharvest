@@ -176,12 +176,16 @@ public sealed class SiteIsolationTests(ApiFixture fixture) : IAsyncLifetime
                 .Select(method => (Method: method, Pattern: e.RoutePattern.RawText!)))
             .ToList();
 
-        // 6 as of M2: detail, latest, raw, aggregate, site assignment, rename. Grows with later slices.
-        Assert.True(routes.Count >= 6, $"Expected the device routes to be discovered, found {routes.Count}.");
+        // 11 as of M3: detail, readings x3, site, name, settings x2, commands x3. Grows with later slices.
+        Assert.True(routes.Count >= 11, $"Expected the device routes to be discovered, found {routes.Count}.");
 
         foreach (var (method, pattern) in routes)
         {
-            var url = "/" + pattern.TrimStart('/').Replace("{deviceId}", _bobDevice, StringComparison.Ordinal);
+            var hasOtherParameters = System.Text.RegularExpressions.Regex.IsMatch(pattern.Replace("{deviceId}", ""), @"\{[^}]+\}");
+            var url = "/" + System.Text.RegularExpressions.Regex.Replace(
+                pattern.TrimStart('/').Replace("{deviceId}", _bobDevice, StringComparison.Ordinal),
+                @"\{[^}]+\}",
+                Guid.Empty.ToString()); // other route values (e.g. {commandId:guid}) get a placeholder
             var request = new HttpRequestMessage(new HttpMethod(method), url)
             {
                 Content = method == "GET" ? null : JsonContent.Create(new { }),
@@ -191,7 +195,7 @@ public sealed class SiteIsolationTests(ApiFixture fixture) : IAsyncLifetime
             Assert.True(status is HttpStatusCode.NotFound or HttpStatusCode.Forbidden,
                 $"{method} {pattern} returned {(int)status} to an outsider.");
 
-            if (method == "GET")
+            if (method == "GET" && !hasOtherParameters)
             {
                 var ownerStatus = (await _bob.GetAsync(url)).StatusCode;
                 Assert.True(ownerStatus == HttpStatusCode.OK, $"GET {pattern} returned {(int)ownerStatus} to the owner.");

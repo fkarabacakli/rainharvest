@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\RainHarvest.Api\RainHarvest.Api.csproj" />
+    <ProjectReference Include="..\..\tools\RainHarvest.DeviceSimulator\RainHarvest.DeviceSimulator.csproj" />
   </ItemGroup>
 
 </Project>

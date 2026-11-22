@@ -15,6 +15,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<SiteMember> SiteMembers => Set<SiteMember>();
 
+    public DbSet<DeviceSettings> DeviceSettings => Set<DeviceSettings>();
+
+    public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Creates the extension in the first migration. Hypertables, continuous

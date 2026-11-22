@@ -32,7 +32,7 @@ public sealed record SimulatorOptions
           --devices <a,b,...>    Device ids             (default: node1)
           --interval <seconds>   Telemetry interval     (default: 10)
           --speed <factor>       Simulated time speed   (default: 1)
-          --scenario <name>      normal                 (more scenarios arrive in M3)
+          --scenario <name>      normal | rain | drought | bad-water | flaky (default: normal)
           --seed <int>           Random seed for repeatable runs
           --help                 Show this help
         """;
@@ -79,9 +79,10 @@ public sealed record SimulatorOptions
             throw new ArgumentException("--interval and --speed must be positive.");
         }
 
-        if (options.Scenario != "normal")
+        if (!DeviceSimulator.Scenario.All.ContainsKey(options.Scenario))
         {
-            throw new ArgumentException($"Unknown scenario '{options.Scenario}'. Available: normal.");
+            throw new ArgumentException(
+                $"Unknown scenario '{options.Scenario}'. Available: {string.Join(", ", DeviceSimulator.Scenario.All.Keys)}.");
         }
 
         return options;

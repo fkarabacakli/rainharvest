@@ -42,7 +42,7 @@ Scalar'da **Authentication → OAuth2** seçili gelir, alanlar admin ile dolu. *
 
 - **Giriş:** `POST /api/v1/auth/token`, form-urlencoded: `grant_type=password&username=…&password=…`. Yanıtta `access_token` (8 saat geçerli) ve `user` var.
 - **İstekler:** `Authorization: Bearer <access_token>` başlığı.
-- **Canlı veri:** [docs/realtime.md](docs/realtime.md) içindeki TypeScript örneği.
+- **Canlı veri:** SignalR, aşağıdaki bölümde.
 - **CORS:** `http://localhost:5173` (Vite), `:3000` ve `:4200` açık. Başka bir port kullanıyorsan `backend/.env` dosyasına `PANEL_ORIGIN=http://localhost:8081` yazıp `docker compose --profile full up -d` ile yeniden başlat.
 
 ```ts
@@ -54,6 +54,91 @@ const devices = await fetch("http://localhost:5255/api/v1/devices", {
   headers: { Authorization: `Bearer ${access_token}` },
 }).then((r) => r.json());
 ```
+
+### Canlı veri (SignalR)
+
+REST ile ekranın **ilk halini** yükle; sonraki değişiklikleri SignalR ile dinle. Sayfayı sürekli yenilemeye ya da her saniye istek atmaya (polling) gerek yok.
+
+**Kurulum:**
+
+```bash
+npm install @microsoft/signalr
+```
+
+**Bağlanma** (girişte aldığın `access_token` ile):
+
+```ts
+import { HubConnectionBuilder, HubConnectionState, LogLevel } from "@microsoft/signalr";
+
+const connection = new HubConnectionBuilder()
+  .withUrl("http://localhost:5255/hubs/live", {
+    accessTokenFactory: () => accessToken, // /auth/token yanıtındaki access_token
+  })
+  .withAutomaticReconnect() // bağlantı koparsa 0, 2, 10, 30 sn sonra tekrar dener
+  .configureLogging(LogLevel.Warning)
+  .build();
+
+// Olay adları birebir böyle yazılmalı (büyük-küçük harf önemli).
+connection.on("ReadingReceived", ({ deviceId, reading }) => {
+  // reading: { receivedAt, levelPct, soilPct, ph, turbidityNtu, raining, flowLpm, flowTotalL, ... }
+});
+connection.on("DeviceStatusChanged", ({ deviceId, isOnline, at }) => { /* online rozetini güncelle */ });
+connection.on("ActuatorStateChanged", ({ deviceId, pumpOn, valveOpen, irrigating }) => { /* pompa/valf ikonu */ });
+connection.on("CommandUpdated", (command) => { /* command.status: Sent → Accepted → Completed (ya da Rejected/Expired) */ });
+connection.on("AlertRaised", (alert) => { /* bildirim göster: alert.message, alert.severity */ });
+connection.on("AlertResolved", (alert) => { /* uyarıyı listeden kaldır */ });
+connection.on("AlertAcknowledged", (alert) => { /* "görüldü" olarak işaretle */ });
+
+// Kopup geri gelince arada kaçanları tekrar gönderilmez: ekranı REST'ten tazele.
+connection.onreconnected(() => reloadFromRest()); // /devices, /alerts ...
+
+await connection.start();
+```
+
+**Olaylar:**
+
+| Olay | Ne zaman gelir | Panelde ne yapılır |
+|---|---|---|
+| `ReadingReceived` | Her cihazdan ~5–10 sn'de bir | Grafiğe nokta ekle, kartlardaki değerleri güncelle |
+| `DeviceStatusChanged` | Cihaz bağlandı/koptu | Online/offline rozeti |
+| `ActuatorStateChanged` | Pompa ya da valf durumu değişti | Pompa/valf ikonları, "sulanıyor" göstergesi |
+| `CommandUpdated` | Komut gönderildi ya da durumu değişti | "Sula" butonunun durumu: bekliyor → başladı → bitti/reddedildi |
+| `AlertRaised` | Yeni uyarı | Bildirim/toast |
+| `AlertResolved` | Uyarının sebebi düzeldi | Uyarıyı aktif listeden kaldır |
+| `AlertAcknowledged` | Biri uyarıyı onayladı | "Görüldü" işareti |
+
+Payload'lar REST yanıtlarıyla aynı şekilde: `CommandUpdated` = `GET .../commands/{id}` yanıtı, `Alert*` = `GET /alerts` öğesi. Alan isimleri camelCase, enum'lar metin (`"Accepted"`, `"WaterQualityBad"`). Ayrıntılı sözleşme: [docs/realtime.md](docs/realtime.md).
+
+**Kim neyi alır:** Sunucu, kullanıcıya yalnızca üyesi olduğu mahallerin cihazlarının olaylarını gönderir; `admin` hepsini alır. Panelde ayrıca filtrelemen gerekmez. Tek bir cihazın sayfasındaysan olayları `deviceId`'ye göre süz.
+
+**Örnek: "Sula" butonu**
+
+```ts
+const res = await fetch(`http://localhost:5255/api/v1/devices/${deviceId}/commands`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+  body: JSON.stringify({ action: "irrigate", durationS: 60 }),
+});
+// 202: komut gönderildi. 409: cihaz offline. 400: geçersiz istek.
+const command = await res.json(); // command.id, command.status === "Sent"
+// Sonucu CommandUpdated olaylarından takip et (command.id ile eşleştir):
+// Accepted → sulama başladı, Completed → bitti, Rejected → command.statusReason (ör. "water_quality")
+```
+
+**Denemek için:**
+
+1. Paneli `demo` kullanıcısıyla aç ve bağlan: `ReadingReceived` olayları birkaç saniyede bir gelmeye başlar.
+2. `backend/.env` içine `SIM_SCENARIO=drought` yaz, `docker compose --profile full up -d simulator` çalıştır: kısa süre sonra backend otomatik sular. `CommandUpdated` ve `ActuatorStateChanged` olayları gelir.
+3. `SIM_SCENARIO=bad-water` ile `AlertRaised` (`WaterQualityBad`) gelir; `normal`'e dönünce `AlertResolved` gelir.
+4. Scalar'dan bir komut gönder (`POST /devices/node1/commands`): panelde aynı anda görünür.
+
+**Dikkat:**
+
+- **Token süresi 8 saat.** Token yalnızca bağlanırken kontrol edilir; açık bağlantı süre dolsa da devam eder. Ama bağlantı koptuğunda yeniden bağlanma eski token ile 401 alır. Bu yüzden `accessTokenFactory` her çağrıldığında **güncel** token'ı döndürmeli (süresi dolduysa önce yenisini al).
+- **Yeni mahale eklenen kullanıcı**, yeni mahalin olaylarını ancak **yeniden bağlanınca** almaya başlar.
+- **CORS hatası** alırsan panelin adresi izinli listede değildir (yukarıdaki `PANEL_ORIGIN`).
+- **Bağlantı ayrıntıları:** Kütüphane önce `POST /hubs/live/negotiate` yapar, sonra WebSocket'e geçer. Token URL'de `?access_token=` olarak gider; bu yalnızca `/hubs` için kabul edilir, REST isteklerinde başlık kullan.
+- **Tarayıcıda kontrol:** DevTools → Network → **WS** sekmesinde `hubs/live` bağlantısını ve gelen mesajları görebilirsin.
 
 ### Senaryo değiştirmek
 

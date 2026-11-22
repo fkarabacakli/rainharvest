@@ -1,0 +1,49 @@
+# Local development infrastructure. Credentials below are for local use only;
+# override them with a .env file (see .env.example) if you like.
+#
+#   docker compose up -d db mosquitto
+#
+# The `full` profile (api + simulator containers) arrives in M5.
+
+name: rainharvest
+
+services:
+  db:
+    image: timescale/timescaledb:2.32.1-pg17
+    environment:
+      POSTGRES_DB: rainharvest
+      POSTGRES_USER: ${POSTGRES_USER:-rainharvest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rainharvest-dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.23
+    environment:
+      MQTT_API_USER: ${MQTT_API_USER:-api}
+      MQTT_API_PASSWORD: ${MQTT_API_PASSWORD:-api-dev}
+      MQTT_SIM_USER: ${MQTT_SIM_USER:-simulator}
+      MQTT_SIM_PASSWORD: ${MQTT_SIM_PASSWORD:-simulator-dev}
+    # The password file is generated from the variables above on every start,
+    # so no hashed secrets live in the repository.
+    entrypoint: ["/bin/sh", "/mosquitto/init.sh"]
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/mosquitto/init.sh:/mosquitto/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -u $${MQTT_API_USER} -P $${MQTT_API_PASSWORD} -t '$$SYS/broker/version' -C 1 -W 3"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  db-data:

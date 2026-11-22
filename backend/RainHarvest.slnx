@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RainHarvest.Api/RainHarvest.Api.csproj" />
+    <Project Path="src/RainHarvest.Contracts/RainHarvest.Contracts.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RainHarvest.Api.IntegrationTests/RainHarvest.Api.IntegrationTests.csproj" />
+    <Project Path="tests/RainHarvest.Api.UnitTests/RainHarvest.Api.UnitTests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/RainHarvest.DeviceSimulator/RainHarvest.DeviceSimulator.csproj" />
+  </Folder>
+</Solution>

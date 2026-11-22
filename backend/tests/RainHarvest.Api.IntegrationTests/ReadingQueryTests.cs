@@ -65,6 +65,7 @@ public sealed class ReadingQueryTests(ApiFixture fixture) : IAsyncLifetime
             (Base.AddMinutes(2), 20),
             (Base.AddMinutes(20), 30),
             (Base.AddMinutes(65), 40));
+        await TestData.RefreshAggregatesAsync(fixture.ConnectionString, Base, Base.AddHours(2));
 
         var result = await _http.GetFromJsonAsync<GetReadingAggregates.Response>(
             $"/api/v1/devices/{deviceId}/readings/aggregate?bucket={bucket}&from={Iso(Base)}&to={Iso(Base.AddHours(2))}", Json);

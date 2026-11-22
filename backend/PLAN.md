@@ -47,7 +47,8 @@ Backend, ESP32 cihazlarından MQTT ile gelen veriyi alır, saklar, kuralları ç
 | D20 | Mahal atama | Cihazı mahale, kullanıcıyı mahale yalnızca Admin atar | En basit güvenli model |
 | D22 | Önceden kayıt (tak-çalıştır) | Admin cihazı ilk bağlantıdan önce id + mahal ile kaydeder; cihaz bağlanınca doğrudan mahalinde görünür. id, cihaza fabrikada yüklenir ya da ESP32 MAC'inden türetilir | Kullanıcı hiçbir şey yapmadan cihazını görür |
 | D21 | Topic'te mahal yok | MQTT topic'i `rainwater/<deviceId>/...` olarak kalır | Cihaz mahalini bilmez; taşıma firmware değişikliği gerektirmez |
-| D11 | API dokümantasyonu | `Microsoft.AspNetCore.OpenApi` + Scalar, Bearer şemalı, yalnızca Development'ta | |
+| D11 | API dokümantasyonu | `Microsoft.AspNetCore.OpenApi` + Scalar, tek güvenlik şeması OAuth2 (password flow), yalnızca Development'ta | Scalar "Authorize" ile kendisi giriş yapar |
+| D23 | Tek giriş noktası | Yalnızca `POST /auth/token` (OAuth2 password grant); ayrı JSON login yok | Standart format; Keycloak'a geçişte istemciler için yalnızca URL değişir |
 | D12 | Gerçek zamanlı veri | SignalR, sözleşmesi `docs/realtime.md` içinde | OpenAPI SignalR'ı kapsamıyor |
 | D13 | Hata modeli | `ProblemDetails` (RFC 9457), doğrulama hataları alan bazında | Panel tek bir formatı işler |
 | D14 | API yolu | `/api/v1/...` | |
@@ -107,7 +108,7 @@ Tümü `/api/v1` altında. Panel ekibi `/openapi/v1.json` üzerinden client üre
 
 | Metot | Yol | Erişim | Açıklama |
 |---|---|---|---|
-| POST | `/auth/login` | anonim | `{username, password}` → `{accessToken, expiresAt, user}` |
+| POST | `/auth/token` | anonim | OAuth2 password grant (form: `grant_type=password`, `username`, `password`) → `{access_token, token_type, expires_in, user}`. Hatalar RFC 6749 formatında (`invalid_grant`, `unsupported_grant_type`). Panel ve Scalar'ın "Authorize" düğmesi bunu kullanır. Token `Authorization: Bearer <token>` başlığıyla gönderilir |
 | GET | `/auth/me` | giriş yapmış | Oturumdaki kullanıcı + üyesi olduğu mahaller |
 | GET | `/users` | Admin | Kullanıcı listesi |
 | POST | `/users` | Admin | Kullanıcı oluştur (`User` veya `Admin`) |
@@ -143,7 +144,7 @@ Tümü `/api/v1` altında. Panel ekibi `/openapi/v1.json` üzerinden client üre
 
 ## 5. Kimlik doğrulama ve yetki
 
-- `POST /auth/login` → HMAC-SHA256 ile imzalı JWT. Claim'ler: `sub`, `name`, `role` (`Admin`/`User`), `exp`. Süre: 8 saat (yapılandırılabilir).
+- `POST /auth/token` (OAuth2 password grant) → HMAC-SHA256 ile imzalı JWT. Claim'ler: `sub`, `name`, `role` (`Admin`/`User`), `exp`. Süre: 8 saat (yapılandırılabilir).
 - **Mahal listesi token'a konmaz.** Erişim her istekte veritabanından kontrol edilir; böylece mahalden çıkarılan kullanıcı token süresi dolmadan da erişimini kaybeder.
 - Şifreler `PasswordHasher<User>` ile hash'lenir.
 - İlk Admin, başlangıçta yapılandırmadan seed edilir.
@@ -154,9 +155,9 @@ Tümü `/api/v1` altında. Panel ekibi `/openapi/v1.json` üzerinden client üre
 - **Mahalsiz cihazlar:** Önceden kaydedilmemiş bir cihaz ilk mesajla otomatik kaydolur, `site_id`'si boştur ve yalnızca Admin görür. Rastgele bir cihaz kimsenin panelinde görünmez.
 - **Mahal içi roller sonradan nasıl eklenir:** `site_members`'a `role` kolonu (varsayılan `Member`) eklenir; erişim filtresi "üye mi?" yerine "rolü yeterli mi?" diye bakar. Mevcut veri ve endpoint'ler bozulmaz.
 - SignalR: token `access_token` query parametresiyle gelir; `JwtBearerEvents.OnMessageReceived` ile okunur.
-- Scalar'da Bearer şeması tanımlı: login'den alınan token girilip korumalı endpoint'ler denenebilir.
+- Scalar'da OAuth2 şeması seçili gelir; Development'ta seed admin bilgileri önceden doldurulur. "Authorize" token'ı alır ve isteklere kendisi ekler.
 - **ESP32 ve simülatör JWT kullanmaz.** Broker'a kendi MQTT kullanıcı adı ve şifresiyle bağlanırlar.
-- **Keycloak'a geçiş yolu:** `JwtOptions.Authority` ayarlanır ve `Auth/Login` slice'ı kaldırılır. Diğer endpoint'ler değişmez.
+- **Keycloak'a geçiş yolu:** `JwtOptions.Authority` ayarlanır ve `Auth/Token` slice'ı kaldırılır; istemciler aynı formatta Keycloak'ın token URL'ini kullanır. Diğer endpoint'ler değişmez.
 
 ## 6. Gerçek zamanlı sözleşme (SignalR)
 
@@ -195,6 +196,7 @@ Ayrıntılar `docs/realtime.md` dosyasında yazılacak (M4).
 | Yabancı anahtarlar | Başka tablolardan `readings`'e FK yok. `readings.device_id → devices.id` FK'si var. |
 | Geçmiş sorguları | Ham okumalar `/readings` endpoint'inden okunur. `/readings/aggregate` için `1m` ham tablodan `time_bucket` ile, `15m` ve `1h` ise **continuous aggregate**'lerden (`readings_15m`, `readings_1h`) okunur. Her bucket'ta ortalama, min ve max; yağmur için "yağdı mı" (bool_or). |
 | Continuous aggregate yenileme | `add_continuous_aggregate_policy`, birkaç dakikada bir. Gerçek zamanlı toplama (real-time aggregation) açık; son dakikalar da sonuçta görünür. |
+| Geriye dönük veri | Gerçek zamanlı gelen telemetri aggregate'lerde anında görünür. Geçmişe yazılan veri (backfill) ise ancak bir sonraki yenilemede görünür (15m: ≤5 dk, 1h: ≤30 dk). Gerekirse `CALL refresh_continuous_aggregate(...)` ile hemen yenilenir; entegrasyon testi de bunu yapar. |
 | Sıkıştırma | 7 günden eski chunk'lar sıkıştırılır (`segmentby = device_id`). |
 | Saklama | Ham veri **90 gün**, aggregate'ler **süresiz** tutulur. Uzun vadeli grafikler aggregate'lerden çizilir. Süreler yapılandırmayla değişebilir. |
 | EF Core ile ilişki | EF tabloları ve normal şemayı yönetir. Hypertable, continuous aggregate ve politikalar **migration içinde ham SQL** (`migrationBuilder.Sql`) ile kurulur. Aggregate'ler EF'te keyless entity olarak view'a eşlenir. |
@@ -264,7 +266,7 @@ Her biri **"bitti" tanımıyla** birlikte:
 |---|---|---|
 | **M0** İskelet | Solution, projeler, `IEndpoint`/`IMqttHandler` altyapısı, DbContext + ilk migration (readings hypertable dahil), ProblemDetails, OpenAPI + Scalar, `/health` (DB + MQTT), docker-compose (TimescaleDB + Mosquitto), CI'sız `dotnet test` | `docker compose up db mosquitto` + `dotnet run` → migration uygulanır, `readings` bir hypertable olur, Scalar açılır, `/health` yeşil döner |
 | **M1** Telemetri uçtan uca | Contracts, IngestTelemetry, Devices (LWT), latest/history endpoint'leri, **simülatörün `normal` senaryosu** | Simülatör çalışırken `/devices/node1/readings/latest` canlı veri döner. Entegrasyon testi geçer |
-| **M2** Auth ve mahaller | Login, me, users, seed admin, Scalar Bearer, sites, üyelikler, cihaz atama ve önceden kayıt (`POST /devices`), M1 endpoint'lerine cihaz erişim filtresi, simülatörsüz test verisi | Token'sız 401; User, Admin endpoint'inde 403. A kullanıcısı yalnızca kendi mahalinin cihazlarını görür, B'nin cihazı A'ya 404 döner; mahalsiz cihazı yalnızca Admin görür. Önceden kaydedilen cihaz ilk MQTT mesajından sonra doğrudan mahalinde görünür. Tüm `/devices/{deviceId}` route'larını tarayan test geçer |
+| **M2** Auth ve mahaller | Token endpoint'i, me, users, seed admin, Scalar OAuth2, sites, üyelikler, cihaz atama ve önceden kayıt (`POST /devices`), M1 endpoint'lerine cihaz erişim filtresi, simülatörsüz test verisi | Token'sız 401; User, Admin endpoint'inde 403. A kullanıcısı yalnızca kendi mahalinin cihazlarını görür, B'nin cihazı A'ya 404 döner; mahalsiz cihazı yalnızca Admin görür. Önceden kaydedilen cihaz ilk MQTT mesajından sonra doğrudan mahalinde görünür. Tüm `/devices/{deviceId}` route'larını tarayan test geçer |
 | **M3** Komutlar, ayarlar, kurallar | SendCommand (202/409), state işleme, settings + retained config, sulama ve kalite kuralları, simülatörün cmd/config desteği ve senaryoları | `drought` senaryosunda backend pompayı otomatik çalıştırır. Kural birim testleri geçer |
 | **M4** Uyarılar ve canlı veri | Alerts, tekrar bastırma, SignalR hub, `docs/realtime.md` | `bad-water` senaryosunda uyarı kaydedilir, `AlertRaised` SignalR event'i görülür ve uyarı `/alerts`'te listelenir |
 | **M5** Analiz ve teslim | CSV export, `full` docker profili, README (kurulum, panel ekibi için rehber) | Panel ekibi yalnızca README ile sistemi kendi makinesinde ayağa kaldırabilir |
@@ -297,8 +299,8 @@ Her biri **"bitti" tanımıyla** birlikte:
 ## 15. Mevcut durum
 
 **M2 tamamlandı** (2026-11-22):
-- JWT girişi (`/auth/login`, `/auth/me`), kullanıcılar, mahaller, üyelikler, cihaz önceden kaydı ve mahal ataması.
-- Her endpoint varsayılan olarak giriş istiyor. Açık olanlar: `/auth/login`, `/health`, `/system/info`, Development'ta OpenAPI ve Scalar.
+- JWT girişi (`/auth/token`, `/auth/me`), kullanıcılar, mahaller, üyelikler, cihaz önceden kaydı ve mahal ataması.
+- Her endpoint varsayılan olarak giriş istiyor. Açık olanlar: `/auth/token`, `/health`, `/system/info`, Development'ta OpenAPI ve Scalar.
 - Cihaz erişimi tek bir grup filtresinde: handler'ı `deviceId` parametresi alan her endpoint otomatik korunuyor. Filtre kapatılınca testlerin kırmızıya döndüğü elle doğrulandı.
 - İlk Admin `Seed:AdminUsername` / `Seed:AdminPassword` ayarından oluşturuluyor (Development: `admin` / `admin-dev-password`). Herhangi bir Admin varken tekrar oluşturulmuyor.
 - Kullanıcı adları büyük-küçük harf duyarsız; bilinmeyen kullanıcı ile yanlış şifre aynı süre ve aynı 401 ile yanıtlanıyor.

@@ -108,10 +108,15 @@ public sealed class ApiFixture : IAsyncLifetime
     public async Task<HttpClient> CreateClientAsync(string username, string password)
     {
         var client = Factory.CreateClient();
-        var response = await client.PostAsJsonAsync("/api/v1/auth/login", new { username, password });
+        var response = await client.PostAsync("/api/v1/auth/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "password",
+            ["username"] = username,
+            ["password"] = password,
+        }));
         response.EnsureSuccessStatusCode();
-        var login = await response.Content.ReadFromJsonAsync<Login.Response>(TestHelpers.Json);
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
+        var token = await response.Content.ReadFromJsonAsync<Token.Response>(TestHelpers.Json);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token!.AccessToken);
         return client;
     }
 

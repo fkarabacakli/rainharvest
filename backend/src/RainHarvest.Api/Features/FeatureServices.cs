@@ -1,3 +1,4 @@
+using RainHarvest.Api.Features.Auth;
 using RainHarvest.Api.Features.Devices;
 
 namespace RainHarvest.Api.Features;
@@ -8,6 +9,7 @@ public static class FeatureServices
     public static IServiceCollection AddFeatureServices(this IServiceCollection services)
     {
         services.AddScoped<DeviceTracker>();
+        services.AddScoped<CredentialVerifier>();
         return services;
     }
 }

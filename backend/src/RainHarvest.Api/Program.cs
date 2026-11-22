@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.OpenApi;
 using RainHarvest.Api.Common.Auth;
 using RainHarvest.Api.Common.Endpoints;
 using RainHarvest.Api.Common.Health;
@@ -17,8 +18,15 @@ builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddOpenApi(o =>
 {
-    o.AddDocumentTransformer<BearerSecurityTransformer>();
-    o.AddOperationTransformer<BearerSecurityTransformer>();
+    // Slices nest their own Request/Response types; prefix them with the slice
+    // name (GetDevice.Response -> GetDeviceResponse) so schema ids never collide.
+    o.CreateSchemaReferenceId = typeInfo =>
+        typeInfo.Type is { IsNested: true, DeclaringType: { } slice, IsGenericType: false } type
+            ? slice.Name + type.Name
+            : OpenApiOptions.CreateDefaultSchemaReferenceId(typeInfo);
+
+    o.AddDocumentTransformer<SecuritySchemeTransformer>();
+    o.AddOperationTransformer<SecuritySchemeTransformer>();
 });
 
 builder.Services.AddPersistence(builder.Configuration);
@@ -41,7 +49,15 @@ app.UseAuthorization();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi().AllowAnonymous();
-    app.MapScalarApiReference().AllowAnonymous();
+    // OAuth2 password flow preselected and prefilled with the seed admin, so
+    // "Authorize" logs in without copy-pasting tokens. Development only.
+    app.MapScalarApiReference(o => o
+            .AddPreferredSecuritySchemes([SecuritySchemeTransformer.OAuth2Scheme])
+            .AddPasswordFlow(SecuritySchemeTransformer.OAuth2Scheme, flow => flow
+                .WithUsername(app.Configuration["Seed:AdminUsername"] ?? "")
+                .WithPassword(app.Configuration["Seed:AdminPassword"] ?? ""))
+            .EnablePersistentAuthentication())
+        .AllowAnonymous();
 }
 
 await app.ApplyMigrationsIfEnabledAsync();

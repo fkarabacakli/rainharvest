@@ -85,6 +85,24 @@ public sealed class TestDevice(ApiFixture fixture) : IAsyncDisposable
 /// <summary>Writes readings straight into the database for query tests.</summary>
 public static class TestData
 {
+    /// <summary>
+    /// Readings written into the past (backfill) only show up in the continuous
+    /// aggregates after a refresh; the scheduled policy may already have
+    /// materialized that window. Refresh explicitly so tests do not depend on job timing.
+    /// </summary>
+    public static async Task RefreshAggregatesAsync(string connectionString, DateTimeOffset from, DateTimeOffset to)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        foreach (var view in new[] { "readings_15m", "readings_1h" })
+        {
+            await using var refresh = new NpgsqlCommand($"CALL refresh_continuous_aggregate('{view}', @from, @to)", connection);
+            refresh.Parameters.AddWithValue("from", from);
+            refresh.Parameters.AddWithValue("to", to);
+            await refresh.ExecuteNonQueryAsync();
+        }
+    }
+
     public static async Task InsertReadingsAsync(string connectionString, string deviceId, params (DateTimeOffset At, double LevelPct)[] rows)
     {
         await using var connection = new NpgsqlConnection(connectionString);

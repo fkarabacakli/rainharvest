@@ -36,19 +36,6 @@ public sealed class AuthTests(ApiFixture fixture)
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/devices")).StatusCode);
     }
 
-    [Theory]
-    [InlineData(ApiFixture.AdminUsername, "wrong-password")]
-    [InlineData("nobody-here", "whatever-password")]
-    public async Task Wrong_credentials_get_the_same_401(string username, string password)
-    {
-        using var client = fixture.CreateAnonymousClient();
-
-        var response = await client.PostAsJsonAsync("/api/v1/auth/login", new { username, password });
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Equal("Invalid credentials", (await response.Content.ReadFromJsonAsync<ProblemBody>(Json))!.Title);
-    }
-
     [Fact]
     public async Task Login_is_case_insensitive_and_me_returns_the_user()
     {
@@ -94,6 +81,53 @@ public sealed class AuthTests(ApiFixture fixture)
             (await admin.PostAsJsonAsync("/api/v1/users", new { username, password = "long-enough-1" })).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict,
             (await admin.PostAsJsonAsync("/api/v1/users", new { username = username.ToUpperInvariant(), password = "long-enough-1" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task OAuth2_password_grant_issues_a_working_token()
+    {
+        using var client = fixture.CreateAnonymousClient();
+
+        var response = await client.PostAsync("/api/v1/auth/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "password",
+            ["username"] = ApiFixture.AdminUsername,
+            ["password"] = ApiFixture.AdminPassword,
+            ["client_id"] = "scalar", // extra fields sent by clients are ignored
+        }));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal("Bearer", body.GetProperty("token_type").GetString());
+        Assert.InRange(body.GetProperty("expires_in").GetInt64(), 1, 8 * 3600);
+        Assert.Equal(ApiFixture.AdminUsername, body.GetProperty("user").GetProperty("username").GetString());
+        Assert.Equal("Admin", body.GetProperty("user").GetProperty("role").GetString());
+
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", body.GetProperty("access_token").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/v1/auth/me")).StatusCode);
+    }
+
+    /// <summary>Unknown user and wrong password must be indistinguishable.</summary>
+    [Theory]
+    [InlineData("password", ApiFixture.AdminUsername, "wrong-password", "invalid_grant")]
+    [InlineData("password", "nobody-here", "whatever-password", "invalid_grant")]
+    [InlineData("client_credentials", ApiFixture.AdminUsername, ApiFixture.AdminPassword, "unsupported_grant_type")]
+    public async Task OAuth2_errors_follow_rfc6749(string grantType, string username, string password, string expectedError)
+    {
+        using var client = fixture.CreateAnonymousClient();
+
+        var response = await client.PostAsync("/api/v1/auth/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = grantType,
+            ["username"] = username,
+            ["password"] = password,
+        }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal(expectedError, body.GetProperty("error").GetString());
     }
 
     private sealed record ProblemBody(string? Title, Dictionary<string, string[]>? Errors);

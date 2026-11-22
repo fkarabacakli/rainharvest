@@ -28,7 +28,7 @@ Backend, ESP32 cihazlarından MQTT ile gelen veriyi alır, saklar, kuralları ç
 - Mahal içi roller ve kullanıcıların kendi mahallerine üye eklemesi; şimdilik tüm yönetim Admin'de (bkz. §5, ileride eklemek ucuz)
 - Cihazın kullanıcı tarafından eşleme koduyla (claim code) eklenmesi; cihazları Admin atar
 - Cihaza özel MQTT şifresi ve broker ACL'i. Tüm cihazlar ortak bir MQTT hesabı kullanır (okul projesi; gerekirse sonradan eklenir, bkz. §13)
-- Bulut deploy
+- Yönetilen bulut platformları (PaaS); yayın kendi VPS'imizde docker compose ile yapılır (M6)
 
 ## 2. Kararlar
 
@@ -55,7 +55,9 @@ Backend, ESP32 cihazlarından MQTT ile gelen veriyi alır, saklar, kuralları ç
 | D14 | API yolu | `/api/v1/...` | |
 | D15 | Zaman | Her yerde UTC, ISO 8601. Sunucu alış zamanı esas, cihaz zamanı ayrıca saklanır | ESP32 saati kayabilir |
 | D16 | Dış bildirim | Şimdilik yok | Kapsamı daraltmak için çıkarıldı |
-| D17 | Broker | Geliştirme: **yerel Mosquitto** (docker). Demo: HiveMQ Cloud. Fark yalnızca yapılandırmada | Geliştirme internete ve kotaya bağımlı olmaz |
+| D17 | Broker | Geliştirme: yerel Mosquitto (docker). **Production: VPS'te Mosquitto**, internete yalnızca 8883 (TLS) açık; HiveMQ Cloud kullanılmıyor | Her şey tek sunucuda, dış hesap ve kota yok |
+| D25 | Yayın | Kendi VPS'imiz; tek sunucu, `docker-compose.prod.yml`. HTTPS'i Caddy (Let's Encrypt) sağlar, veritabanı dışarıya kapalı | Okul projesi ölçeği için en basit ve tam kontrollü yol |
+| D26 | MQTT TLS | Kendi küçük CA'mız: bir script CA + sunucu sertifikası (alan adı/IP SAN, 2–3 yıl) üretir; ESP32 firmware'i CA sertifikasını gömer. Docker iç ağında API ↔ Mosquitto şifresiz 1883 | Let's Encrypt'in 90 günlük yenilemesi ve Caddy'nin root'a ait anahtar dosyası Mosquitto için sorun çıkarır; kendi CA'mızda yenileme derdi yok, alan adı şart değil |
 | D18 | Sırlar | `dotnet user-secrets` (yerel), ortam değişkenleri (docker). Repo'ya sır girmez | |
 | D19 | Doğruluk kaynağı | Eyleyici durumu için **cihazın bildirdiği `state`** esas alınır, gönderilen komut değil | Güvenlik kuralları ESP32'de; cihaz komutu reddedebilir |
 
@@ -285,6 +287,7 @@ Her biri **"bitti" tanımıyla** birlikte:
 | **M3** Komutlar, ayarlar, kurallar | SendCommand (202/409), state işleme, settings + retained config, sulama ve kalite kuralları, simülatörün cmd/config desteği ve senaryoları | `drought` senaryosunda backend pompayı otomatik çalıştırır. Kural birim testleri geçer |
 | **M4** Uyarılar ve canlı veri | Alerts, tekrar bastırma, SignalR hub, `docs/realtime.md` | `bad-water` senaryosunda uyarı kaydedilir, `AlertRaised` SignalR event'i görülür ve uyarı `/alerts`'te listelenir |
 | **M5** Analiz ve teslim | CSV export, `full` docker profili, README (kurulum, panel ekibi için rehber) | Panel ekibi yalnızca README ile sistemi kendi makinesinde ayağa kaldırabilir |
+| **M6** Production (VPS) | `docker-compose.prod.yml` (Caddy, API, TimescaleDB, Mosquitto); Production yapılandırması ve sunucudaki `.env`'den sırlar; demo verisi ve Scalar kapalı (Scalar istenirse ayarla açılır); Mosquitto TLS (8883) + CA/sertifika üretim scripti; `/auth/token`'a IP başına rate limit (Caddy arkasında gerçek istemci IP'si için forwarded headers); Docker log boyutu sınırı; `pg_dump` yedekleme scripti ve geri yükleme notu (TimescaleDB pre/post restore); `DEPLOY.md` (DNS, güvenlik duvarı 22/80/443/8883, ilk kurulum, güncelleme, yedekleme); `docs/mqtt.md`'ye production bağlantısı ve CA | Temiz bir VPS'te `DEPLOY.md` adımlarıyla: HTTPS'ten giriş yapılır, gerçek ESP32 ya da simülatör 8883/TLS ile bağlanıp veri gönderir, şifresiz 1883 ve 5432 dışarıdan erişilemez, token endpoint'i rate limit'e takılır, yedek alınıp geri yüklenebilir |
 
 **Panel ekibiyle eşgüdüm:** M0 sonunda OpenAPI taslağı paylaşılır. M1'den itibaren arkadaşın simülatörle gerçek veri görebilir.
 
@@ -296,7 +299,9 @@ Her biri **"bitti" tanımıyla** birlikte:
 | Kural salınımı (pompa sürekli açılıp kapanır) | Donanım yıpranır | Histerezis + cooldown + cihaz tarafında maksimum çalışma süresi |
 | Uyarı seli | Panel ve uyarı listesi gereksiz kayıtla dolar | Açık uyarı varken tekrar açılmaz |
 | MQTT kopması | Veri kaybı | Otomatik yeniden bağlanma, `/health`'te görünür. Kalıcı oturum (clean session = false) M3'te değerlendirilir |
-| HiveMQ ile yerel Mosquitto arasındaki farklar (TLS, kotalar) | Demo günü sürpriz | M3 sonunda bir kez HiveMQ'ya karşı uçtan uca deneme |
+| Production'da TLS'li MQTT ilk kez denenecek | Demo günü cihazlar bağlanamaz | M6'da simülatör `--tls` ile VPS'e bağlanarak denenir; ESP32 ile bir kez gerçek deneme |
+| İnternete açık sunucu | Kaba kuvvet giriş denemesi, sızan geliştirme sırları | Production'da geliştirme sırları ve demo verisi yok; token endpoint'inde rate limit; yalnızca 22/80/443/8883 açık |
+| Tek sunucu, tek disk | Veri kaybı | Günlük `pg_dump`, yedeği sunucu dışına kopyalama talimatı |
 | EF Core Timescale nesnelerini bilmiyor | Migration'lar hypertable'ı bozabilir, bucket sorguları LINQ'e uymaz | Timescale nesneleri yalnızca ham SQL migration'larında; bucket sorguları `FromSql` ile. Entegrasyon testi `readings`'in hypertable olduğunu doğrular |
 | Ekip üyelerinin ortam kurulumu | Herkese PostgreSQL kurmak zahmetli | Veritabanı yalnızca docker-compose ile çalışır; yerel kurulum gerekmez |
 | Yeni bir endpoint'te erişim kontrolünün unutulması | Başka kullanıcının verisi sızar | Kontrol tek bir ortak filtrede; tüm `/devices/{deviceId}` route'larını tarayan test |
@@ -304,6 +309,8 @@ Her biri **"bitti" tanımıyla** birlikte:
 | JWT anahtarının sızması | Yetkisiz erişim | Anahtar user-secrets ve ortam değişkeninde tutulur, en az 256 bit |
 
 ## 14. Açık noktalar
+
+- M6 için: alan adı (HTTPS için gerekli; ücretsiz alt alan adı da olur), panelin aynı sunucudan sunulup sunulmayacağı, VPS'in işletim sistemi ve RAM'i
 
 - Firmware ekibinin `docs/mqtt.md`'deki kesinleşen `cmd`/`state`/`config` sözleşmesini onaylaması; `DeviceControllerTests` beklenen davranışı gösteriyor
 - Yeniden bağlanmada kalıcı MQTT oturumu kullanılıp kullanılmayacağı (M3)
